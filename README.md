@@ -6,6 +6,7 @@ cadence, laid out as `<language>/<integration>/`.
 
 | Plugin | Package | Root API | Maturity |
 |---|---|---|---|
+| [`python/harbor`](python/harbor) | [`temporalio-harbor`](https://pypi.org/project/temporalio-harbor/) | `temporalio.harbor` | Experimental |
 | [`python/mcp`](python/mcp) | [`temporalio-mcp`](https://pypi.org/project/temporalio-mcp/) | `temporalio.mcp` | Experimental |
 | [`python/openai_agents`](python/openai_agents) | [`temporalio-openai-agents`](https://pypi.org/project/temporalio-openai-agents/) | `temporalio.openai_agents` | GA |
 
@@ -15,6 +16,7 @@ More plugins are migrating here from the SDK repositories; see the target table 
 ## Install
 
 ```
+$ uv add temporalio-harbor
 $ uv add temporalio-mcp
 $ uv add temporalio-openai-agents
 ```
