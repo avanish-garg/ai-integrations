@@ -1,0 +1,151 @@
+"""Plain data passed between the Workflow and the segment Activity."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from temporalio.contrib.workflow_streams import WorkflowStreamState
+
+
+@dataclass
+class ToolSpec:
+    """What Claude sees about one durable tool.
+
+    Attributes:
+        name: Tool name, unique within the agent.
+        description: What the tool does, shown to Claude.
+        input_schema: JSON Schema of the tool's single argument.
+    """
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+@dataclass
+class ToolOutcome:
+    """The stored result of a durable tool call, handed back to Claude.
+
+    Attributes:
+        content: The tool's result (any JSON-serializable value).
+        is_error: Whether the call failed; Claude sees the content as an error.
+    """
+
+    content: Any = None
+    is_error: bool = False
+
+
+@dataclass
+class DeferredCall:
+    """A tool call Claude asked for; the Workflow runs it as its own Activity.
+
+    Attributes:
+        id: The ``tool_use_id`` Claude assigned to the call.
+        name: The durable tool's name.
+        input: The call's arguments.
+    """
+
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+@dataclass
+class SegmentInput:
+    """Input of one model segment: from a prompt or a tool result to the next pause.
+
+    Attributes:
+        session_id: The Claude session to start or continue.
+        prompt: The user's prompt, when this segment starts a task.
+        tools: The durable tools Claude may call.
+        system_prompt: Optional system prompt.
+        model: Optional model name.
+        max_turns: Optional cap on engine turns within the segment.
+        builtin_tools: Claude Code built-in tools to enable inside the engine.
+        checkpoint: Where the session's last committed segment ended, or None when
+            nothing is committed yet (the segment starts a new session).
+        injected: Tool results to deliver to Claude, by ``tool_use_id``.
+        segment_index: Index of this segment among all the agent's segments.
+        live_output: Publish Claude's text to the Workflow's stream while running.
+        fork: Continue in a copy of the session that ends at ``checkpoint``, because
+            an earlier segment that did not commit may have written to the session.
+            Retries (attempt 2 and later) always do this.
+    """
+
+    session_id: str
+    prompt: str | None
+    tools: list[ToolSpec]
+    system_prompt: str | None = None
+    model: str | None = None
+    max_turns: int | None = None
+    builtin_tools: list[str] = field(default_factory=list)
+    checkpoint: str | None = None
+    injected: dict[str, ToolOutcome] = field(default_factory=dict)
+    segment_index: int = 0
+    live_output: bool = False
+    fork: bool = False
+
+
+@dataclass
+class SegmentOutput:
+    """Output of one model segment.
+
+    Attributes:
+        session_id: The session the segment used (a new one after a fork).
+        result: Claude's final answer, when the agent finished.
+        deferred: The tool call Claude paused at, when there is one.
+        checkpoint: Where this segment's turn ends in the session; the next segment
+            receives it. Required for every segment that is not an error.
+        cost_usd: Model cost of this segment, as reported by the SDK.
+        is_error: Whether the segment failed in a way retrying cannot fix.
+        error: A description of that failure.
+    """
+
+    session_id: str
+    result: str | None = None
+    deferred: DeferredCall | None = None
+    checkpoint: str | None = None
+    cost_usd: float = 0.0
+    is_error: bool = False
+    error: str | None = None
+
+
+@dataclass
+class AgentState:
+    """What a new Workflow run needs to continue an agent after Continue-As-New.
+
+    The conversation itself stays in the SDK's session store, so this stays small.
+    Type the Workflow parameter that carries it as ``AgentState | None``.
+
+    Attributes:
+        session_id: The Claude session.
+        checkpoint: Where the last committed segment ended in the session.
+        segment_index: Index of the next segment.
+        task_prompt: The prompt of the unfinished task, or None when idle.
+        task_segments: Segments used by the unfinished task so far.
+        pending: Tool results not yet delivered to Claude, by ``tool_use_id``.
+        recent_call_ids: The most recent tool calls that already ran, so none can run
+            again in a later run.
+        segments: Segments run by this agent across all runs.
+        tool_calls: Durable tool calls run by this agent across all runs.
+        total_cost_usd: Model cost reported by the SDK across all runs.
+        runs: Workflow runs this agent has used, counting the current one.
+        fork_next: The last task stopped early, so the next segment continues in a
+            copy of the session that ends at ``checkpoint``.
+        stream: The live output stream's state, when live output is on.
+    """
+
+    session_id: str | None = None
+    checkpoint: str | None = None
+    segment_index: int = 0
+    task_prompt: str | None = None
+    task_segments: int = 0
+    pending: dict[str, ToolOutcome] = field(default_factory=dict)
+    recent_call_ids: list[str] = field(default_factory=list)
+    segments: int = 0
+    tool_calls: int = 0
+    total_cost_usd: float = 0.0
+    runs: int = 1
+    fork_next: bool = False
+    stream: WorkflowStreamState | None = None
