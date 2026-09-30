@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,6 +18,7 @@ from claude_agent_sdk import (
     MirrorErrorMessage,
     ResultMessage,
     SessionKey,
+    ToolResultBlock,
     ToolUseBlock,
     project_key_for_directory,
 )
@@ -28,7 +31,7 @@ from mcp.types import (
     ToolAnnotations,
 )
 
-from tests.hybrid.models import Attempt, Call, Reply
+from tests.hybrid.models import Attempt, Call, Entry, Reply
 from tests.hybrid.store import TranscriptStore
 
 SCHEMA: dict[str, Any] = {
@@ -69,6 +72,8 @@ class Burst:
         resume: bool = False,
         subagents: bool = False,
         storage_timeout: float = 5,
+        recovery: bool = False,
+        recovery_entries: dict[str, Entry] | None = None,
     ) -> None:
         self.root, self.store, self.session_id = root, store, session_id
         self.attempt, self.execute = attempt, execute
@@ -96,9 +101,28 @@ class Burst:
         self.server = Server(
             "durable", on_list_tools=self.list_tools, on_call_tool=self.call_tool
         )
+        recovery_options: dict[str, Any] = {}
+        if recovery:
+            if subagents:
+                raise PrototypeBlocked("main-agent recovery excludes subagents")
+            if not hasattr(ClaudeAgentOptions, "recover_pending_tool"):
+                raise PrototypeBlocked(
+                    "main-agent recovery requires the local SDK wheel"
+                )
+            recovery_options["recover_pending_tool"] = self.recover_tool
+            # The only durable fixture is explicitly read-only and eligible
+            # for concurrency. Other tools need their own scheduling policy.
+            recovery_options["parallel_tool_recovery"] = True
+            for tid, entry in (recovery_entries or {}).items():
+                if entry.call.subpath:
+                    raise PrototypeBlocked("child call in main-agent recovery ledger")
+                self.calls[tid] = replace(entry.call, attempt=attempt)
+                if entry.outcome is not None:
+                    self.replies[tid] = entry.outcome
         self.sdk = ClaudeSDKClient(
             options=ClaudeAgentOptions(
                 cwd=str(root),
+                cli_path=os.environ.get("HYBRID_CLI_PATH"),
                 env=env,
                 tools=["Agent", "TaskOutput"] if subagents else [],
                 allowed_tools=[
@@ -119,9 +143,25 @@ class Burst:
                 session_id=None if resume else session_id,
                 resume=session_id if resume else None,
                 forward_subagent_text=True,
+                **recovery_options,
             )
         )
         self.reader: asyncio.Task[None] | None = None
+
+    async def recover_tool(self, pending: Any) -> ToolResultBlock:
+        if pending.key != self.key or not pending.name.startswith("mcp__durable__"):
+            raise PrototypeBlocked("unexpected session or tool in recovery")
+        name = pending.name.removeprefix("mcp__durable__")
+        uid, subpath = await self.store.wait_call(
+            self.key, pending.id, pending.name, pending.input, self.storage_timeout
+        )
+        if subpath or uid != pending.transcript_uuid:
+            raise PrototypeBlocked("recovery ID disagrees with stored main-agent call")
+        call = Call(pending.id, name, dict(pending.input), self.attempt, uid)
+        self.calls[call.id] = call
+        reply = await self.execute(call)
+        self.replies[call.id] = reply
+        return ToolResultBlock(call.id, reply.text, reply.is_error)
 
     async def list_tools(self, ctx: Any, params: Any) -> ListToolsResult:
         del ctx, params

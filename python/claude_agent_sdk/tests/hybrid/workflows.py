@@ -19,6 +19,7 @@ with workflow.unsafe.imports_passed_through():
         Reply,
         Snapshot,
         State,
+        TurnCheckpoint,
     )
 
 
@@ -141,6 +142,20 @@ class HybridWorkflow:
         entry.approved = approved
 
     @workflow.update
+    async def finish_turn(self, turn: TurnCheckpoint) -> None:
+        self.check_attempt(turn.attempt)
+        if not turn.uuid or not turn.attempt.burst <= turn.index < len(
+            self.state.prompts
+        ):
+            raise ApplicationError("invalid completed turn", non_retryable=True)
+        previous = self.state.turns.get(turn.index)
+        if previous is not None:
+            if (previous.uuid, previous.answer) != (turn.uuid, turn.answer):
+                raise ApplicationError("conflicting completed turn", non_retryable=True)
+            return
+        self.state.turns[turn.index] = turn
+
+    @workflow.update
     async def acknowledge(self, checkpoint: Checkpoint) -> None:
         self.check_attempt(checkpoint.attempt)
         expected = {
@@ -160,4 +175,6 @@ class HybridWorkflow:
 
     @workflow.query
     def snapshot(self) -> Snapshot:
-        return Snapshot(self.attempts, self.state.ledger, self.state.checkpoints)
+        return Snapshot(
+            self.attempts, self.state.ledger, self.state.checkpoints, self.state.turns
+        )

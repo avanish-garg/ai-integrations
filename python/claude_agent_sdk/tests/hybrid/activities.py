@@ -7,11 +7,20 @@ import json
 import os
 from pathlib import Path
 
+from claude_agent_sdk import project_key_for_directory
+
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 from tests.hybrid.engine import Burst, PrototypeBlocked
-from tests.hybrid.models import Attempt, BurstInput, Call, Checkpoint, Reply
+from tests.hybrid.models import (
+    Attempt,
+    BurstInput,
+    Call,
+    Checkpoint,
+    Reply,
+    TurnCheckpoint,
+)
 from tests.hybrid.store import TranscriptStore
 from tests.hybrid.workflows import HybridWorkflow
 
@@ -23,6 +32,7 @@ class HybridActivities:
         self.client, self.root, self.env, self.store = client, root, env, store
         self.bursts: list[Burst] = []
         self.subagents = False
+        self.recovery = False
         self.started: dict[str, float] = {}
         self.finished: dict[str, float] = {}
         self.tool_calls: list[str] = []
@@ -78,7 +88,9 @@ class HybridActivities:
         if snap.checkpoints and snap.checkpoints[-1].attempt.burst == inp.burst:
             return snap.checkpoints[-1].answers
         # Completed-turn recovery can resume. Pending-call recovery has no proven protocol.
-        if any(e.call.attempt.burst == inp.burst for e in snap.ledger.values()):
+        if not self.recovery and any(
+            e.call.attempt.burst == inp.burst for e in snap.ledger.values()
+        ):
             raise ApplicationError(
                 "blocked: Activity lost with uncheckpointed native MCP calls; "
                 "published engine cannot yet be trusted to restore pending identities",
@@ -88,6 +100,19 @@ class HybridActivities:
         async def execute(call: Call) -> Reply:
             return await handle.execute_update(HybridWorkflow.request, call)
 
+        resume = inp.checkpoint is not None
+        if self.recovery and info.attempt > 1:
+            # Storage may contain a requested call even if the old Worker died
+            # before its request Update reached Temporal.
+            resume = bool(
+                await self.store.load(
+                    {
+                        "project_key": project_key_for_directory(str(self.root)),
+                        "session_id": inp.session_id,
+                    }
+                )
+            )
+
         burst = Burst(
             self.root,
             self.env,
@@ -95,8 +120,14 @@ class HybridActivities:
             inp.session_id,
             attempt,
             execute,
-            resume=inp.checkpoint is not None,
+            resume=resume,
             subagents=self.subagents,
+            recovery=self.recovery,
+            recovery_entries={
+                tid: entry
+                for tid, entry in snap.ledger.items()
+                if entry.call.attempt.burst == inp.burst
+            },
         )
         burst.before_request = self.before_request
         burst.before_delivery = self.before_delivery
@@ -106,7 +137,20 @@ class HybridActivities:
             await burst.open()
             with (self.root / "cli-pids.jsonl").open("a") as log:
                 log.write(json.dumps({"pid": burst.pid, "worker": os.getpid()}) + "\n")
-            answers = [(await burst.query(p)).result or "" for p in inp.prompts]
+            answers = []
+            for offset, prompt in enumerate(inp.prompts):
+                index = inp.burst + offset
+                completed = snap.turns.get(index)
+                if completed is not None:
+                    answers.append(completed.answer)
+                    continue
+                answer = (await burst.query(prompt)).result or ""
+                uid, _ = await burst.checkpoint()
+                await handle.execute_update(
+                    HybridWorkflow.finish_turn,
+                    TurnCheckpoint(attempt, index, uid, answer),
+                )
+                answers.append(answer)
             uid, delivered = await burst.checkpoint()
             await handle.execute_update(
                 HybridWorkflow.acknowledge,

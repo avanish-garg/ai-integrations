@@ -57,6 +57,48 @@ class TranscriptStore:
             raise OSError("injected transcript write failure")
         await asyncio.to_thread(self._append, key, entries)
 
+    async def append_if_unchanged(
+        self,
+        key: SessionKey,
+        expected_last_uuid: str,
+        entries: list[SessionStoreEntry],
+    ) -> bool:
+        self.writing.set()
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.fail:
+            raise OSError("injected recovery write failure")
+
+        def commit() -> bool:
+            with self.connect() as db:
+                # Ordinary appends take SQLite's same writer lock. The head
+                # check and the whole recovery batch commit together.
+                db.execute("BEGIN IMMEDIATE")
+                head = db.execute(
+                    "SELECT uuid FROM entries WHERE project=? AND session=? "
+                    "AND subpath=? AND uuid IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                    (key["project_key"], key["session_id"], key.get("subpath", "")),
+                ).fetchone()
+                if not head or head[0] != expected_last_uuid:
+                    return False
+                db.executemany(
+                    "INSERT INTO entries(project,session,subpath,uuid,data) "
+                    "VALUES (?,?,?,?,?)",
+                    [
+                        (
+                            key["project_key"],
+                            key["session_id"],
+                            key.get("subpath", ""),
+                            e.get("uuid"),
+                            json.dumps(e),
+                        )
+                        for e in entries
+                    ],
+                )
+            return True
+
+        return await asyncio.to_thread(commit)
+
     def _load(self, key: SessionKey) -> list[SessionStoreEntry] | None:
         with self.connect() as db:
             rows = db.execute(

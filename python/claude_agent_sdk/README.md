@@ -220,7 +220,94 @@ make lint
 make test   # the real Claude Code engine against a local fake Messages API; no credentials
 ```
 
-## Hybrid feasibility experiment (2026-09-30)
+## Main-agent recovery with the sibling SDK (2026-09-30)
+
+The current design covers **main agents only**. The sibling
+`claude-agent-sdk-python` checkout implements an opt-in
+`ClaudeAgentOptions.recover_pending_tool` callback. The hybrid test Activity uses
+that callback on retry to reconnect original native tool IDs to the Workflow
+ledger. Approval waits and already scheduled Activities remain in Temporal;
+completed outcomes are reused. Missing request Updates are reconstructed from
+stored native assistant calls, without an argument match or a replacement model
+call.
+
+Recovery completes pending tools **before the replacement CLI starts**. The SDK
+selects the active conversation branch and all streamed assistant blocks sharing
+its API message ID, retains delivered results, and obtains missing outcomes from
+the callback. It conditionally appends ordinary `tool_result` entries and reads
+the transcript back before materializing it for resume. No private deferral
+markers are fabricated. This resolves the SDK/CLI handoff by presenting a
+completed batch to the engine; the old Python MCP callbacks are not resurrected.
+
+`SessionStore.append_if_unchanged` is a new optional upstream adapter operation,
+required for this recovery mode. The test store implements it with a SQLite
+transaction serialized with ordinary transcript writes. A changed head, failed
+write, conflicting native ID, or failed readback prevents CLI startup. The host
+still owns the session lease and attempt fencing. Independent read-only echo
+callbacks opt into parallel recovery; the SDK default preserves call order.
+External Activity effects continue to require idempotency.
+
+The Workflow also records each completed user task's answer and transcript proof
+through an Update. A retry partway through a multi-task burst skips acknowledged
+tasks and retains their original answers. CLI checkpoints and Continue-As-New
+remain internal test helpers; production public APIs and dependencies are
+unchanged.
+
+| Main-agent capability | Result | Reproduction |
+|---|---|---|
+| Recover original calls before tool scheduling, after completion/before delivery, and in a partially delivered batch | **supported** | `test_cli_loss_recovers_original_main_calls`, resume and explicit stored fork |
+| Replace a Worker before its request Update reaches Temporal | **supported** | `test_replacement_worker_recovers_main_calls[...-before-update]` |
+| Keep approval decisions, reject the correct call, reuse scheduled Activities and completed outcomes | **supported** | Remaining Worker-loss cases; original IDs, zero duplicate schedules, two primary model requests |
+| Preserve earlier task answers when a later task loses its Worker | **supported** | `test_worker_loss_during_second_task_preserves_first_answer`; Workflow history replay verified |
+| Conditional persistence, lost write acknowledgment, callback cancellation and failed readback | **supported** | Sibling `tests/test_main_agent_recovery.py`, both asyncio and Trio |
+| Gracefully suspend with unresolved live MCP callbacks | **blocked** | Intentionally disabled; this change verifies crash recovery, not the CLI's graceful cancellation semantics |
+
+Worker-loss recovery tests model a supervising host stopping the old CLI after
+Worker SIGKILL. Python cannot guarantee that teardown after SIGKILL itself; the
+existing unsupervised orphan probe remains an explicit limitation. The new
+recovery code rejects subagent execution and does not attempt child restoration.
+Historical subagent probes below remain baseline evidence, outside this design.
+
+Validation uses a **non-editable local SDK 0.2.162 wheel**, built from the sibling
+feature branch (`8dac98b`), with the plugin's other committed locked dependencies. The full
+plugin suite passed **161 tests**, with the optional benchmark skipped, using
+CLI **2.1.273**. All **15 main-agent recovery cases** also passed using the sibling
+SDK's current pinned CLI **2.1.285**. The upstream SDK suite passed **1,625 tests**
+(6 optional skips), including 38 recovery cases across asyncio and Trio. Lint,
+repository conventions, 101 tooling tests, wheel/sdist checks and isolated smoke
+installs passed. The plugin suite still
+emitted its existing unawaited-Workflow-coroutine cleanup warning. Tests use the
+real CLI, the strict deterministic local Messages API and the pinned Temporal
+dev server without provider credentials.
+
+To install the sibling change here without a committed path dependency:
+
+```bash
+# From python/claude_agent_sdk; make sync retains the published baseline.
+make sync
+.venv/bin/python tests/hybrid/install_sdk.py \
+  --sdk-dir /absolute/path/to/claude-agent-sdk-python
+# The installer preserves the environment's bundled CLI unless --cli is supplied.
+# UV_NO_SYNC keeps uv run from replacing the local wheel with the committed lock.
+UV_NO_SYNC=1 make lint
+UV_NO_SYNC=1 make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py -n 4 -q'
+UV_NO_SYNC=1 make test PYTEST_ARGS='-n 4 -q'
+# Test another pinned binary without changing the installed SDK or dependency lock:
+HYBRID_CLI_PATH=/absolute/path/to/claude UV_NO_SYNC=1 \
+  make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py -n 4 -q'
+# Restore the published dependency environment afterwards:
+make sync
+```
+
+The recovery tests skip with the published baseline SDK, which lacks the opt-in
+API. `tests/hybrid/test_recovery.py` and the original Worker-loss probes continue
+to verify the ordinary resume limitation with recovery disabled. The SDK change
+and the test integration are separate feature history; no plugin-specific CI,
+public suspension configuration, idle threshold or release-version change is
+introduced. A main-agent hybrid runner is feasible under this persistence and
+ownership contract; a production refactor is separate work.
+
+## Hybrid feasibility experiment (published SDK baseline, 2026-09-30)
 
 The test-only prototype in [`tests/hybrid`](tests/hybrid) keeps one
 `ClaudeSDKClient` and its bundled CLI alive for an agent burst. Its low-level MCP

@@ -22,8 +22,11 @@ async def main() -> None:
         if key.startswith(("ANTHROPIC", "CLAUDE", "DISABLE_", "NO_PROXY", "no_proxy"))
     }
     acts = HybridActivities(client, root, env, TranscriptStore(root / "store.db"))
+    acts.recovery = os.environ.get("HYBRID_MAIN_RECOVERY") == "1"
     if os.environ.get("HYBRID_HOLD_DELIVERY"):
         acts.before_delivery = asyncio.Event()
+    if os.environ.get("HYBRID_HOLD_REQUEST"):
+        acts.before_request = asyncio.Event()
     if os.environ.get("HYBRID_HOLD_CHECKPOINT"):
         acts.after_checkpoint = asyncio.Event()
     async with Worker(

@@ -34,6 +34,8 @@ async def launch(
     machine: int,
     hold: bool,
     checkpoint_hold: bool = False,
+    recovery: bool = False,
+    request_hold: bool = False,
 ) -> subprocess.Popen[bytes]:
     log = root / f"worker-{machine}.log"
     env = {
@@ -46,6 +48,9 @@ async def launch(
     }
     if checkpoint_hold:
         env["HYBRID_HOLD_CHECKPOINT"] = "1"
+    env["HYBRID_MAIN_RECOVERY"] = "1" if recovery else "0"
+    if request_hold:
+        env["HYBRID_HOLD_REQUEST"] = "1"
     if hold:
         env["HYBRID_HOLD_DELIVERY"] = "1"
     with log.open("wb") as out:

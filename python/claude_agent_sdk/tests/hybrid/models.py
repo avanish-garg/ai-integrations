@@ -51,6 +51,14 @@ class Checkpoint:
 
 
 @dataclass
+class TurnCheckpoint:
+    attempt: Attempt
+    index: int
+    uuid: str
+    answer: str
+
+
+@dataclass
 class BurstInput:
     session_id: str
     prompts: list[str]
@@ -69,6 +77,7 @@ class State:
     ledger: dict[str, Entry] = field(default_factory=dict)
     checkpoints: list[Checkpoint] = field(default_factory=list)
     answers: list[str] = field(default_factory=list)
+    turns: dict[int, TurnCheckpoint] = field(default_factory=dict)
 
 
 @dataclass
@@ -76,3 +85,4 @@ class Snapshot:
     attempts: dict[int, Attempt]
     ledger: dict[str, Entry]
     checkpoints: list[Checkpoint]
+    turns: dict[int, TurnCheckpoint] = field(default_factory=dict)
