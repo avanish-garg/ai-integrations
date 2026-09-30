@@ -7,8 +7,6 @@ import json
 import os
 from pathlib import Path
 
-from claude_agent_sdk import project_key_for_directory
-
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
@@ -104,14 +102,9 @@ class HybridActivities:
         if self.recovery and info.attempt > 1:
             # Storage may contain a requested call even if the old Worker died
             # before its request Update reached Temporal.
-            resume = bool(
-                await self.store.load(
-                    {
-                        "project_key": project_key_for_directory(str(self.root)),
-                        "session_id": inp.session_id,
-                    }
-                )
-            )
+            # A missing recovery transcript must fail rather than silently
+            # starting another model turn with replacement tool IDs.
+            resume = True
 
         burst = Burst(
             self.root,

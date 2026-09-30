@@ -269,14 +269,18 @@ recovery code rejects subagent execution and does not attempt child restoration.
 Historical subagent probes below remain baseline evidence, outside this design.
 
 Validation uses a **non-editable local SDK 0.2.162 wheel**, built from the sibling
-feature branch (`8dac98b`), with the plugin's other committed locked dependencies. The full
+feature branch (`222b09b`), with the plugin's other committed locked dependencies. The full
 plugin suite passed **161 tests**, with the optional benchmark skipped, using
 CLI **2.1.273**. All **15 main-agent recovery cases** also passed using the sibling
-SDK's current pinned CLI **2.1.285**. The upstream SDK suite passed **1,625 tests**
-(6 optional skips), including 38 recovery cases across asyncio and Trio. Lint,
+SDK's current pinned CLI **2.1.285**. A disposable newest-policy dependency
+lane selected Temporal **1.34.0** and passed all **21 recovery/Workflow tests**
+and lint (Python 3.14.4, CLI 2.1.273), retaining the committed lock. The upstream SDK suite passed **1,633 tests**
+(6 optional skips), including 46 recovery cases across asyncio and Trio. Lint,
 repository conventions, 101 tooling tests, wheel/sdist checks and isolated smoke
-installs passed. The plugin suite still
-emitted its existing unawaited-Workflow-coroutine cleanup warning. Tests use the
+installs passed. The initial full plugin run
+emitted its existing unawaited-Workflow-coroutine cleanup warning. Coroutine
+disposal now bypasses Workflow handler draining, and the subsequent targeted
+locked/newest checks completed without that cleanup warning. Tests use the
 real CLI, the strict deterministic local Messages API and the pinned Temporal
 dev server without provider credentials.
 
@@ -327,7 +331,7 @@ Continue-As-New waits for handlers and for the CLI Activity's teardown; it carri
 the ledger, answers and checkpoint to the next run. These helpers add no installed
 public API, idle threshold, suspension configuration or CI workflow.
 
-**Assessment: do not undertake a full refactor yet.** Live execution and
+**Published baseline assessment:** Live execution and
 completed-task suspension work, but the published engine does not restore
 unresolved MCP callbacks, including child calls. While an approval or batch is
 pending, the prototype refuses suspension and leaves the CLI/callback alive.
@@ -413,6 +417,5 @@ HYBRID_BENCHMARK=1 HYBRID_BENCHMARK_OUT=/tmp/hybrid-benchmark.json \
 # Run sync-latest in a disposable checkout, then repeat the capability command.
 ```
 
-Keep production idle policy and public suspension controls deferred until an
-engine protocol preserves pending native IDs and completed outcomes for both
-main agents and subagents across loss and restoration.
+The published baseline did not establish pending-call recovery. The current
+main-agent design and its suspension limits are described above.

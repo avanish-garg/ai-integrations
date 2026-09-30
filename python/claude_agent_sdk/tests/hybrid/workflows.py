@@ -35,6 +35,10 @@ class HybridWorkflow:
     async def run(self, state: State) -> State:
         try:
             return await self.drive(state)
+        except GeneratorExit:
+            # Coroutine disposal can run outside the Workflow runtime; it
+            # cannot issue commands or await handler completion there.
+            raise
         except BaseException:
             self.closing = True
             await workflow.wait_condition(workflow.all_handlers_finished)
