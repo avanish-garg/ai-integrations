@@ -1,0 +1,291 @@
+"""One live ClaudeSDKClient per burst, with a fail-closed native MCP bridge."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import Callable, Coroutine
+from contextlib import suppress
+from pathlib import Path
+from typing import Any, cast
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    MirrorErrorMessage,
+    ResultMessage,
+    SessionKey,
+    ToolUseBlock,
+    project_key_for_directory,
+)
+from mcp.server import Server
+from mcp.types import (
+    CallToolResult,
+    ListToolsResult,
+    TextContent,
+    Tool,
+    ToolAnnotations,
+)
+
+from tests.hybrid.models import Attempt, Call, Reply
+from tests.hybrid.store import TranscriptStore
+
+SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "n": {"type": "integer"},
+        "approval": {"type": "boolean"},
+        "delay": {"type": "number", "minimum": 0},
+    },
+    "required": ["n"],
+    "additionalProperties": False,
+}
+
+
+class PrototypeBlocked(RuntimeError):
+    pass
+
+
+def native_id(meta: Any) -> str:
+    if hasattr(meta, "model_dump"):
+        meta = meta.model_dump(by_alias=True)
+    tid = (meta or {}).get("claudecode/toolUseId")
+    if not isinstance(tid, str) or not tid:
+        raise PrototypeBlocked("missing native MCP tool-use ID")
+    return tid
+
+
+class Burst:
+    def __init__(
+        self,
+        root: Path,
+        env: dict[str, str],
+        store: TranscriptStore,
+        session_id: str,
+        attempt: Attempt,
+        execute: Callable[[Call], Coroutine[Any, Any, Reply]],
+        *,
+        resume: bool = False,
+        subagents: bool = False,
+        storage_timeout: float = 5,
+    ) -> None:
+        self.root, self.store, self.session_id = root, store, session_id
+        self.attempt, self.execute = attempt, execute
+        self.storage_timeout = storage_timeout
+        self.key: SessionKey = {
+            "project_key": project_key_for_directory(str(root)),
+            "session_id": session_id,
+        }
+        self.observed: dict[str, tuple[str, dict[str, Any]]] = {}
+        self.calls: dict[str, Call] = {}
+        self.replies: dict[str, Reply] = {}
+        self.callbacks: set[asyncio.Task[Reply]] = set()
+        self.messages: list[Any] = []
+        self.results: asyncio.Queue[ResultMessage | BaseException] = asyncio.Queue()
+        self.active_children: set[str] = set()
+        self.failure: BaseException | None = None
+        self.closed = False
+        self.pid = 0
+        self.version = ""
+        self.round_latencies: list[float] = []
+        self.callback_started = asyncio.Event()
+        self.before_request: asyncio.Event | None = None
+        self.before_delivery: asyncio.Event | None = None
+        self.received_reply = asyncio.Event()
+        self.server = Server(
+            "durable", on_list_tools=self.list_tools, on_call_tool=self.call_tool
+        )
+        self.sdk = ClaudeSDKClient(
+            options=ClaudeAgentOptions(
+                cwd=str(root),
+                env=env,
+                tools=["Agent", "TaskOutput"] if subagents else [],
+                allowed_tools=[
+                    "mcp__durable__echo",
+                    *(["Agent", "TaskOutput"] if subagents else []),
+                ],
+                mcp_servers={
+                    "durable": {
+                        "type": "sdk",
+                        "name": "durable",
+                        "instance": self.server,
+                    }
+                },
+                setting_sources=[],
+                strict_mcp_config=True,
+                session_store=cast(Any, store),
+                session_store_flush="eager",
+                session_id=None if resume else session_id,
+                resume=session_id if resume else None,
+                forward_subagent_text=True,
+            )
+        )
+        self.reader: asyncio.Task[None] | None = None
+
+    async def list_tools(self, ctx: Any, params: Any) -> ListToolsResult:
+        del ctx, params
+        # Echo is read-only. Do not advertise mutating tools as read-only to force concurrency.
+        return ListToolsResult(
+            tools=[
+                Tool(
+                    name="echo",
+                    description="Echo a number.",
+                    input_schema=SCHEMA,
+                    annotations=ToolAnnotations(
+                        read_only_hint=True,
+                        destructive_hint=False,
+                        idempotent_hint=True,
+                        open_world_hint=False,
+                    ),
+                )
+            ]
+        )
+
+    async def call_tool(self, ctx: Any, params: Any) -> CallToolResult:
+        try:
+            tid = native_id(ctx.meta)
+            arguments = dict(params.arguments or {})
+            deadline = time.monotonic() + self.storage_timeout
+            while tid not in self.observed:
+                if time.monotonic() > deadline:
+                    raise PrototypeBlocked(
+                        f"no observed assistant call for native ID {tid}"
+                    )
+                await asyncio.sleep(0.01)
+            if self.observed[tid] != ("mcp__durable__" + params.name, arguments):
+                raise PrototypeBlocked(
+                    "native ID disagrees with observed assistant call"
+                )
+            uid, subpath = await self.store.wait_call(
+                self.key,
+                tid,
+                "mcp__durable__" + params.name,
+                arguments,
+                self.storage_timeout,
+            )
+            call = Call(tid, params.name, arguments, self.attempt, uid, subpath)
+            self.calls[tid] = call
+            self.callback_started.set()
+            if self.before_request is not None:
+                await self.before_request.wait()
+            task = asyncio.create_task(self.execute(call))
+            self.callbacks.add(task)
+            try:
+                reply = await task
+                self.replies[tid] = reply
+                self.received_reply.set()
+                if self.before_delivery is not None:
+                    await self.before_delivery.wait()
+            finally:
+                self.callbacks.discard(task)
+            return CallToolResult(
+                content=[TextContent(type="text", text=reply.text)],
+                is_error=reply.is_error,
+            )
+        except Exception as exc:
+            self.failure = exc
+            return CallToolResult(
+                content=[TextContent(type="text", text=str(exc))], is_error=True
+            )
+
+    async def open(self) -> Burst:
+        await self.sdk.connect()
+        # Private transport access only for test instrumentation, never for protocol changes.
+        transport: Any = self.sdk._transport
+        self.pid = transport._process.pid
+        self.reader = asyncio.create_task(self.read())
+        return self
+
+    async def read(self) -> None:
+        try:
+            async for msg in self.sdk.receive_messages():
+                self.messages.append(msg)
+                if isinstance(msg, AssistantMessage):
+                    for b in msg.content:
+                        if isinstance(b, ToolUseBlock):
+                            self.observed[b.id] = (b.name, dict(b.input))
+                if isinstance(msg, MirrorErrorMessage):
+                    self.failure = PrototypeBlocked(
+                        msg.error or "transcript mirror failed"
+                    )
+                data = getattr(msg, "data", {})
+                if data.get("subtype") == "init":
+                    self.version = str(data.get("claude_code_version", ""))
+                subtype = getattr(msg, "subtype", data.get("subtype"))
+                task_id = getattr(msg, "task_id", data.get("task_id"))
+                if subtype == "task_started" and task_id:
+                    self.active_children.add(task_id)
+                elif subtype == "task_notification" and task_id:
+                    self.active_children.discard(task_id)
+                if isinstance(msg, ResultMessage):
+                    await self.results.put(msg)
+        except Exception as exc:
+            await self.results.put(exc)
+
+    async def query(self, prompt: Any) -> ResultMessage:
+        started = time.monotonic()
+        await self.sdk.query(prompt)
+        human_result: ResultMessage | None = None
+        while True:
+            msg = await self.results.get()
+            if isinstance(msg, BaseException):
+                raise msg
+            if self.failure:
+                raise self.failure
+            if msg.is_error:
+                raise PrototypeBlocked(str(msg.errors or msg.subtype))
+            if not msg.origin or msg.origin.get("kind") == "human":
+                human_result = msg
+            if human_result and not self.active_children and not self.callbacks:
+                self.round_latencies.append(time.monotonic() - started)
+                return human_result
+
+    async def checkpoint(self) -> tuple[str, list[str]]:
+        if self.callbacks or self.active_children:
+            raise PrototypeBlocked("pending calls/children must keep the CLI alive")
+        transcripts = await self.store.transcripts(self.key)
+        delivered: set[str] = set()
+        for entries in transcripts.values():
+            for entry in entries:
+                content = entry.get("message", {}).get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        tid = block.get("tool_use_id")
+                        if block.get("type") != "tool_result" or tid not in self.calls:
+                            continue
+                        reply = self.replies.get(tid)
+                        value = block.get("content", "")
+                        if isinstance(value, list):
+                            value = "".join(b.get("text", "") for b in value)
+                        if (
+                            reply is None
+                            or value != reply.text
+                            or bool(block.get("is_error")) != reply.is_error
+                        ):
+                            raise PrototypeBlocked(
+                                "stored tool result differs from completed outcome"
+                            )
+                        delivered.add(tid)
+        if not set(self.calls).issubset(delivered):
+            raise PrototypeBlocked("completed results have not reached session storage")
+        final = [e for e in transcripts[""] if e.get("type") == "assistant"]
+        if not final:
+            raise PrototypeBlocked("completed assistant turn is not stored")
+        return str(final[-1]["uuid"]), sorted(self.calls)
+
+    async def suspend_pending(self) -> bool:
+        # No proven published engine protocol for unresolved MCP callbacks/batches.
+        # Leave the process and callback intact. The defer runner is probed separately.
+        return False
+
+    async def close(self) -> None:
+        self.closed = True
+        for task in self.callbacks:
+            task.cancel()
+        await asyncio.gather(*self.callbacks, return_exceptions=True)
+        await self.sdk.disconnect()
+        if self.reader is not None:
+            self.reader.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.reader

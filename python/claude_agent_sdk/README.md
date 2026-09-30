@@ -219,3 +219,113 @@ make sync   # install (non-editable) into .venv
 make lint
 make test   # the real Claude Code engine against a local fake Messages API; no credentials
 ```
+
+## Hybrid feasibility experiment (2026-09-30)
+
+The test-only prototype in [`tests/hybrid`](tests/hybrid) keeps one
+`ClaudeSDKClient` and its bundled CLI alive for an agent burst. Its low-level MCP
+server reads `claudecode/toolUseId` from request metadata, verifies the ID, tool
+name and arguments against the observed assistant call and the stored transcript,
+then awaits a Workflow Update. The Workflow records approvals, tool Activity
+scheduling and outcomes under the native ID. The echo fixture retains its full
+JSON Schema and truthful read-only/idempotency annotations; it does not add IDs
+to model arguments or use an argument match to recover a regenerated call.
+
+Each CLI Activity attempt registers before accepting callbacks. Older attempts
+are fenced. Duplicate requests share an Activity/outcome, conflicting IDs fail,
+and eager transcript mirroring must reach the transactional test store before a
+tool can be scheduled. The store supports parent transcripts and child subkeys.
+Completed checkpoints are acknowledged through Updates in Workflow history.
+Continue-As-New waits for handlers and for the CLI Activity's teardown; it carries
+the ledger, answers and checkpoint to the next run. These helpers add no installed
+public API, idle threshold, suspension configuration or CI workflow.
+
+**Assessment: do not undertake a full refactor yet.** Live execution and
+completed-task suspension work, but the published engine does not restore
+unresolved MCP callbacks, including child calls. While an approval or batch is
+pending, the prototype refuses suspension and leaves the CLI/callback alive.
+If its CLI or Worker is lost with uncheckpointed calls, the Workflow preserves
+its ledger and fails closed rather than silently reissuing the work.
+
+| Capability | Result | Reproduction / scope |
+|---|---|---|
+| Reuse one process across tool rounds and messages | **supported** | `test_reuse_and_completed_task_suspension`; benchmark: 20 rounds per process |
+| Three native eligible calls execute concurrently with their original IDs | **supported** | `test_native_batch_overlaps_without_rediscovery`, `test_temporal_batch_and_history_replay`; two model requests for a three-call batch, no rediscovery |
+| Route approval/rejection to the correct call; keep a pending callback alive | **supported** | `test_approvals_duplicates_conflicts_and_stale_attempts`, `test_pending_approval_preserves_process_and_callback` |
+| Defer a single call using PR #33's engine mechanism | **supported** | `test_existing_single_call_approval_deferral`; independent of suspending a live MCP callback |
+| Stop after a completed task, restore context in a new CLI, Continue-As-New | **supported** | `test_reuse_and_completed_task_suspension`, `test_continue_as_new_after_stopped_cli_and_finished_handlers` |
+| Recover an acknowledged checkpoint after the Worker loses the Activity reply | **supported** | `test_worker_loss_after_acknowledged_checkpoint_reuses_outcomes`; recorded answers/outcomes reused without another tool schedule or CLI start |
+| Restore pending main-agent calls or a partially completed batch | **blocked** | `test_pending_recovery_probe`: CLI killed before scheduling, after completion/before delivery, or after one batch result; tests both resume/fork and prompt/result injection |
+| Replace a Worker with uncheckpointed calls | **blocked** | `test_replacement_worker_preserves_ledger_and_fails_closed`: same three phases, a different Worker/config folder; ledger and completed outcomes survive, continuation is refused, no duplicate Activity schedules |
+| Foreground/background subagent tools and overlapping parent/child requests | **supported** | `test_subagent_tools_are_temporal_activities`, `test_background_parent_child_requests_overlap` |
+| Store/materialize completed child transcripts | **supported** | `test_subagent_live_and_stored`; `list_subkeys` and child `load` calls verified on a new client/config folder |
+| Restore a pending child call after process loss | **blocked** | `test_child_process_loss_does_not_restore_pending_call`, foreground and background, both pending and completed-before-delivery; child transcript is loaded but its original callback and undelivered outcome are not restored |
+| Delayed/failed writes, duplicate Updates, conflicting native IDs and stale attempts | **supported** | `test_no_tool_before_transcript_storage`, `test_inconsistent_native_id_is_rejected_before_execution`, `test_new_registration_fences_an_actual_older_attempt` and approval tests; no tool executes without the transcript proof |
+| Cancellation tears down the CLI and callback tasks | **supported** | `test_cancellation_stops_cli_and_pending_callbacks`; heartbeats cover registration as well as active work |
+| Guarantee orphan cleanup after Worker SIGKILL without supervision | **unsupported** | Worker-loss tests: Python teardown cannot run after SIGKILL; the test harness explicitly kills only the recorded child PIDs. A production implementation needs process supervision |
+| Exactly-once external side effects | **unsupported** | `test_retry_after_side_effect_uses_stable_idempotency_key`: two Activity executions, one local effect because the test service deduplicates the stable key; external services must implement equivalent idempotency |
+
+The main recovery blocker is observable in the model's next request. For an
+unresolved native call, the engine supplies an error result containing
+`[Request interrupted by user for tool use]` instead of restoring the callback.
+A result already delivered and mirrored before a partial-batch crash survives;
+a completed result held before MCP delivery does not. Sending normal
+`tool_result` blocks under the original IDs on resume does not replace those
+interrupted results. Forking through `fork_session_via_store` has the same
+limitation. The probes do not invent deferral markers or edit transcripts to
+claim a restore protocol. Child subkeys are discoverable and materialized, but
+that alone does not restore pending child execution. The recovery tests assert
+these observed blockers explicitly, rather than skipping or marking them xfail.
+
+Primary measurements use the committed lock: Claude Agent SDK **0.2.153**,
+bundled Claude Code **2.1.273**, MCP **2.2.0**, Temporal **1.33.0**, Python
+**3.14.7**, macOS arm64. `make sync-latest` with the repository's two-week cooldown
+selects the same Claude/MCP versions and Temporal **1.34.0**; capability tests
+are repeated in a separate disposable worktree so the committed lock is retained.
+No provider credentials are required: every engine test uses the existing local
+strict Messages API and the pinned Temporal dev server.
+
+The benchmark runs each mode three times, with 20 tool rounds each. Latency is
+the interval between successive primary model requests (tool dispatch/result,
+storage and next model turn); it excludes the initial process start. Total wall
+time includes startup and teardown. Counts cover agent CLI starts and primary
+model requests; they exclude version checks and incidental engine requests.
+Both modes use real Temporal Workflows and Activities. The hybrid tool also
+records a small SQLite idempotency fixture. There is no timing pass/fail threshold,
+and these deterministic local-model numbers do not predict provider latency.
+Raw samples are in [`tests/hybrid/benchmark-locked.json`](tests/hybrid/benchmark-locked.json).
+
+| Mode | Trial | CLI starts | Model requests | Median round (ms) | p95 round (ms) | Wall time (s) |
+|---|---:|---:|---:|---:|---:|---:|
+| Segment | 1 | 21 | 21 | 359.3 | 376.1 | 7.68 |
+| Hybrid | 1 | 1 | 21 | 151.4 | 169.2 | 3.41 |
+| Segment | 2 | 21 | 21 | 368.6 | 383.5 | 7.76 |
+| Hybrid | 2 | 1 | 21 | 149.4 | 169.2 | 3.42 |
+| Segment | 3 | 21 | 21 | 367.5 | 385.6 | 7.76 |
+| Hybrid | 3 | 1 | 21 | 152.5 | 171.1 | 3.51 |
+
+Verification completed locally: `make sync`, `make lint`, the full locked suite
+(144 passed, benchmark skipped), all capability tests in the newest allowed lane,
+and the opt-in benchmark. Two additional completed-child recovery cases then
+passed in both lanes (nine subagent cases total). Repository conventions,
+101 tooling tests, wheel/sdist checks and clean-environment smoke installs passed.
+The full suite emitted an unawaited-Workflow-coroutine RuntimeWarning during
+pytest cleanup, with no failed tests. Validation covers macOS/Python 3.14 on this
+machine; the other CI platforms/runtime versions were not run here.
+
+Run from `python/claude_agent_sdk`:
+
+```bash
+make sync
+make lint
+make test PYTEST_ARGS='tests/hybrid -n 4 -q'
+# Print detailed blocker evidence (including native IDs and model-visible results):
+make test PYTEST_ARGS='tests/hybrid/test_recovery.py tests/hybrid/test_subagents.py tests/hybrid/test_worker_loss.py -n 0 -s -q'
+HYBRID_BENCHMARK=1 HYBRID_BENCHMARK_OUT=/tmp/hybrid-benchmark.json \
+  make test PYTEST_ARGS='tests/hybrid/test_performance.py -n 0 -s -q'
+# Run sync-latest in a disposable checkout, then repeat the capability command.
+```
+
+Keep production idle policy and public suspension controls deferred until an
+engine protocol preserves pending native IDs and completed outcomes for both
+main agents and subagents across loss and restoration.
