@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import asyncio
-import gc
 import itertools
 import json
 import logging
@@ -31,7 +30,6 @@ import sys
 import threading
 import unicodedata
 import uuid
-import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -661,7 +659,4 @@ async def test_two_agents_cannot_both_use_live_output(
                 break
             await asyncio.sleep(0.2)
         await handle.terminate()
-    with warnings.catch_warnings():  # the failed initialization never ran the Workflow
-        warnings.simplefilter("ignore", RuntimeWarning)
-        gc.collect()
     assert "Only one DurableClaudeAgent per Workflow can use live_output" in message

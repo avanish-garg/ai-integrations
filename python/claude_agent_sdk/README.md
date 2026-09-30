@@ -308,10 +308,17 @@ A disposable newest-policy lane selected Temporal **1.34.0** and passed all
 leaving the committed lock unchanged. The upstream SDK suite passed **1,633
 tests** (6 optional skips), including 46 recovery cases across asyncio and Trio.
 Lint, repository conventions, 101 tooling tests, wheel/sdist checks and isolated
-smoke installs passed. The full plugin run still emitted the existing Temporal
-unawaited-Workflow-coroutine cleanup warning; focused checks completed without
-it. Tests use the real CLI, the strict deterministic local Messages API and the
-pinned Temporal dev server without provider credentials.
+smoke installs passed. The earlier cleanup warning came from the negative
+two-live-agent test failing during Workflow construction, before Temporal awaited
+its allocated run coroutine. That test Workflow now captures the constructor's
+validation error and reports it from its run method; the warning suppression was
+removed, and unawaited coroutines and unraisable exceptions now fail the suite.
+The isolated reproduction and the full **183-test suite** complete pytest
+teardown cleanly with warnings treated as errors. The published dependency-floor
+lane (Temporal **1.33.0**, Claude SDK **0.2.153**) also passed lint and **146 tests**
+with clean teardown; 38 cases skip without the local recovery feature or the
+opt-in benchmark. Tests use the real CLI, the strict deterministic local Messages
+API and the pinned Temporal dev server without provider credentials.
 
 To install the sibling change here without a committed path dependency:
 
@@ -429,9 +436,10 @@ Verification completed locally: `make sync`, `make lint`, the full locked suite
 and the opt-in benchmark. Two additional completed-child recovery cases then
 passed in both lanes (nine subagent cases total). Repository conventions,
 101 tooling tests, wheel/sdist checks and clean-environment smoke installs passed.
-The full suite emitted an unawaited-Workflow-coroutine RuntimeWarning during
-pytest cleanup, with no failed tests. Validation covers macOS/Python 3.14 on this
-machine; the other CI platforms/runtime versions were not run here.
+This initial run emitted an unawaited-Workflow-coroutine RuntimeWarning during
+pytest cleanup; the test cleanup fix described above resolves it. Validation
+covers macOS/Python 3.14 on this machine; the other CI platforms/runtime versions
+were not run here.
 
 Run from `python/claude_agent_sdk`:
 

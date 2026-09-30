@@ -38,9 +38,18 @@ class TwoLiveAgentsWorkflow:
 
     def __init__(self) -> None:
         self.first = DurableClaudeAgent(tools=[COUNT], live_output=True)
-        self.second = DurableClaudeAgent(tools=[COUNT], live_output=True)
+        self.initialization_error: str | None = None
+        try:
+            self.second = DurableClaudeAgent(tools=[COUNT], live_output=True)
+        except RuntimeError as err:
+            # Temporal allocates its run coroutine before constructing the
+            # Workflow. Let construction finish so it awaits that coroutine;
+            # an initialization failure otherwise leaves it unawaited on eviction.
+            self.initialization_error = str(err)
 
     @workflow.run
     async def run(self, prompt: str) -> str:
-        """Never reached: initialization fails."""
+        """Report the constructor's validation failure from the running coroutine."""
+        if self.initialization_error is not None:
+            raise RuntimeError(self.initialization_error)
         return await self.first.run(prompt)

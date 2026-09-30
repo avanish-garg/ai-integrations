@@ -73,6 +73,8 @@ timeout_func_only = true
 filterwarnings = [
   "error::temporalio.workflow.UnfinishedUpdateHandlersWarning",
   "error::temporalio.workflow.UnfinishedSignalHandlersWarning",
+  "error:coroutine .* was never awaited:RuntimeWarning",
+  "error::pytest.PytestUnraisableExceptionWarning",
   "ignore::pytest.PytestDeprecationWarning",
   "ignore::DeprecationWarning",
 ]

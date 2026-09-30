@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
 import time
 from collections.abc import Callable, Coroutine
@@ -346,7 +347,11 @@ class Burst:
             return True
         if not self.recovery or self.active_children or self.closed:
             return False
-        from claude_agent_sdk._internal.main_agent_recovery import pending_tool_uses
+        # Optional sibling-SDK capability. Published SDKs never reach this
+        # path, and their environments must still be able to lint the probe.
+        pending_tool_uses = importlib.import_module(
+            "claude_agent_sdk._internal.main_agent_recovery"
+        ).pending_tool_uses
 
         async with self.suspending:
             if self.suspended is not None:
