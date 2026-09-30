@@ -18,6 +18,8 @@ from claude_agent_sdk import (
     MirrorErrorMessage,
     ResultMessage,
     SessionKey,
+    SessionStoreEntry,
+    StreamEvent,
     ToolResultBlock,
     ToolUseBlock,
     project_key_for_directory,
@@ -31,7 +33,7 @@ from mcp.types import (
     ToolAnnotations,
 )
 
-from tests.hybrid.models import Attempt, Call, Entry, Reply
+from tests.hybrid.models import Attempt, Call, Entry, PendingCheckpoint, Reply
 from tests.hybrid.store import TranscriptStore
 
 SCHEMA: dict[str, Any] = {
@@ -78,6 +80,15 @@ class Burst:
         self.root, self.store, self.session_id = root, store, session_id
         self.attempt, self.execute = attempt, execute
         self.storage_timeout = storage_timeout
+        self.recovery = recovery
+        self.suspended: PendingCheckpoint | None = None
+        self.suspension_failure: Exception | None = None
+        self.suspending = asyncio.Lock()
+        self.delivery = asyncio.Event()
+        self.delivery.set()
+        self.batch_ids: set[str] = set()
+        self.batch_complete = False
+        self.batch_stop: str | None = None
         self.key: SessionKey = {
             "project_key": project_key_for_directory(str(root)),
             "session_id": session_id,
@@ -140,6 +151,7 @@ class Burst:
                 strict_mcp_config=True,
                 session_store=cast(Any, store),
                 session_store_flush="eager",
+                include_partial_messages=recovery,
                 session_id=None if resume else session_id,
                 resume=session_id if resume else None,
                 forward_subagent_text=True,
@@ -217,6 +229,7 @@ class Burst:
                 self.received_reply.set()
                 if self.before_delivery is not None:
                     await self.before_delivery.wait()
+                await self.delivery.wait()
             finally:
                 self.callbacks.discard(task)
             return CallToolResult(
@@ -231,7 +244,7 @@ class Burst:
 
     async def open(self) -> Burst:
         await self.sdk.connect()
-        # Private transport access only for test instrumentation, never for protocol changes.
+        # The test-only suspension probe also owns this subprocess's hard stop.
         transport: Any = self.sdk._transport
         self.pid = transport._process.pid
         self.reader = asyncio.create_task(self.read())
@@ -241,6 +254,20 @@ class Burst:
         try:
             async for msg in self.sdk.receive_messages():
                 self.messages.append(msg)
+                if isinstance(msg, StreamEvent) and msg.parent_tool_use_id is None:
+                    event = msg.event
+                    if event.get("type") == "message_start":
+                        self.batch_ids.clear()
+                        self.batch_complete = False
+                        self.batch_stop = None
+                    elif event.get("type") == "content_block_start":
+                        block = event.get("content_block", {})
+                        if block.get("type") == "tool_use":
+                            self.batch_ids.add(block["id"])
+                    elif event.get("type") == "message_delta":
+                        self.batch_stop = event.get("delta", {}).get("stop_reason")
+                    elif event.get("type") == "message_stop":
+                        self.batch_complete = self.batch_stop == "tool_use"
                 if isinstance(msg, AssistantMessage):
                     for b in msg.content:
                         if isinstance(b, ToolUseBlock):
@@ -315,9 +342,123 @@ class Burst:
         return str(final[-1]["uuid"]), sorted(self.calls)
 
     async def suspend_pending(self) -> bool:
-        # No proven published engine protocol for unresolved MCP callbacks/batches.
-        # Leave the process and callback intact. The defer runner is probed separately.
-        return False
+        if self.suspended is not None:
+            return True
+        if not self.recovery or self.active_children or self.closed:
+            return False
+        from claude_agent_sdk._internal.main_agent_recovery import pending_tool_uses
+
+        async with self.suspending:
+            if self.suspended is not None:
+                return True
+            if not self.batch_complete or not self.batch_ids.issubset(self.calls):
+                return False
+            # Park result delivery before the first await. Temporal work can
+            # finish, but no new callback outcome can reach the live CLI.
+            self.delivery.clear()
+            stopped = False
+            try:
+                transcripts = await self.store.transcripts(self.key)
+                if any(path for path in transcripts if path):
+                    return False
+                entries = transcripts[""]
+                stored = {
+                    block.get("id"): (entry.get("uuid"), block)
+                    for entry in entries
+                    if entry.get("type") == "assistant"
+                    for block in entry.get("message", {}).get("content", [])
+                    if isinstance(block, dict) and block.get("type") == "tool_use"
+                }
+                if not set(self.calls).issubset(stored):
+                    return False
+                for tid, recorded in self.calls.items():
+                    uid, block = stored[tid]
+                    if (uid, block.get("name"), block.get("input")) != (
+                        recorded.transcript_uuid,
+                        "mcp__durable__" + recorded.name,
+                        recorded.arguments,
+                    ):
+                        return False
+                pending, leaf = pending_tool_uses(
+                    self.key, cast(list[SessionStoreEntry], entries)
+                )
+                ids = {call.id for call in pending}
+                if not ids or not ids.issubset(self.batch_ids):
+                    return False
+                if not self.batch_ids.issubset(self.observed):
+                    return False
+                for call in pending:
+                    recovery_call = self.calls.get(call.id)
+                    if recovery_call is None or (
+                        call.name,
+                        call.input,
+                        call.transcript_uuid,
+                    ) != (
+                        "mcp__durable__" + recovery_call.name,
+                        recovery_call.arguments,
+                        recovery_call.transcript_uuid,
+                    ):
+                        return False
+                delivered: set[str] = set()
+                for entry in entries:
+                    content = entry.get("message", {}).get("content", [])
+                    if entry.get("type") != "user" or not isinstance(content, list):
+                        continue
+                    for block in content:
+                        if (
+                            not isinstance(block, dict)
+                            or block.get("type") != "tool_result"
+                        ):
+                            continue
+                        result_id = block.get("tool_use_id")
+                        if (
+                            not isinstance(result_id, str)
+                            or result_id not in self.calls
+                        ):
+                            continue
+                        reply = self.replies.get(result_id)
+                        value = block.get("content", "")
+                        if isinstance(value, list):
+                            value = "".join(b.get("text", "") for b in value)
+                        if reply is None or (value, bool(block.get("is_error"))) != (
+                            reply.text,
+                            reply.is_error,
+                        ):
+                            return False
+                        delivered.add(result_id)
+                if ids | delivered != set(self.calls) or ids & delivered:
+                    return False
+                assert leaf is not None
+                # SIGKILL/TerminateProcess before cancelling any callback or
+                # closing stdin. EOF/SIGTERM lets the engine synthesize errors.
+                transport: Any = self.sdk._transport
+                process = transport._process
+                process.kill()
+                stopped = True
+                await asyncio.wait_for(process.wait(), self.storage_timeout)
+                await self.close()
+                restored = await self.store.load(self.key)
+                if restored != entries:
+                    raise PrototypeBlocked(
+                        "transcript changed while stopping pending CLI"
+                    )
+                self.suspended = PendingCheckpoint(
+                    self.attempt,
+                    self.session_id,
+                    str(leaf["uuid"]),
+                    sorted(ids),
+                    sorted(delivered),
+                    self.pid,
+                )
+                return True
+            except Exception as exc:
+                if stopped:
+                    raise
+                self.suspension_failure = exc
+                return False
+            finally:
+                if not stopped:
+                    self.delivery.set()
 
     async def close(self) -> None:
         self.closed = True

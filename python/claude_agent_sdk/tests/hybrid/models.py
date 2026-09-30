@@ -59,11 +59,29 @@ class TurnCheckpoint:
 
 
 @dataclass
+class PendingCheckpoint:
+    attempt: Attempt
+    session_id: str
+    uuid: str
+    pending: list[str]
+    delivered: list[str]
+    pid: int
+
+
+@dataclass
+class BurstResult:
+    answers: list[str] = field(default_factory=list)
+    pending: PendingCheckpoint | None = None
+
+
+@dataclass
 class BurstInput:
     session_id: str
     prompts: list[str]
     burst: int = 0
     checkpoint: Checkpoint | None = None
+    generation: int = 0
+    recovering: bool = False
 
 
 @dataclass
@@ -78,6 +96,10 @@ class State:
     checkpoints: list[Checkpoint] = field(default_factory=list)
     answers: list[str] = field(default_factory=list)
     turns: dict[int, TurnCheckpoint] = field(default_factory=dict)
+    pending: PendingCheckpoint | None = None
+    suspensions: list[PendingCheckpoint] = field(default_factory=list)
+    resume_requested: bool = False
+    continue_on_suspend: bool = False
 
 
 @dataclass
@@ -86,3 +108,5 @@ class Snapshot:
     ledger: dict[str, Entry]
     checkpoints: list[Checkpoint]
     turns: dict[int, TurnCheckpoint] = field(default_factory=dict)
+    suspend_requested: Attempt | None = None
+    pending: PendingCheckpoint | None = None

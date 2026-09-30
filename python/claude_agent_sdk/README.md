@@ -260,7 +260,36 @@ unchanged.
 | Keep approval decisions, reject the correct call, reuse scheduled Activities and completed outcomes | **supported** | Remaining Worker-loss cases; original IDs, zero duplicate schedules, two primary model requests |
 | Preserve earlier task answers when a later task loses its Worker | **supported** | `test_worker_loss_during_second_task_preserves_first_answer`; Workflow history replay verified |
 | Conditional persistence, lost write acknowledgment, callback cancellation and failed readback | **supported** | Sibling `tests/test_main_agent_recovery.py`, both asyncio and Trio |
-| Gracefully suspend with unresolved live MCP callbacks | **blocked** | Intentionally disabled; this change verifies crash recovery, not the CLI's graceful cancellation semantics |
+| Suspend pending approvals, running Activities, completed/undelivered results and partial batches using a controlled process stop | **supported** | `tests/hybrid/test_pending_suspension.py`; original IDs and outcomes retained |
+| Recover a stopped session on another Worker, repeat suspension, and roll over after outstanding outcomes settle | **supported** | Worker replacement, repeated-stop, lost-Activity-completion and Continue-As-New cases in the suspension tests |
+| Graceful engine suspension through ordinary cancellation/EOF | **blocked** | No verified engine pause handshake; the original resume probes do not restore unresolved callbacks. The supported host stop below avoids this path |
+
+Pending suspension is now a **test-only controlled hard stop**. Partial-message
+events establish that the main model response ended with `tool_use`; incomplete
+streams cannot be suspended. The Activity waits until every callback's request
+Update has reached the Workflow. It then parks callback result delivery, checks
+every native call and delivered outcome against storage, and calls the
+subprocess's `kill()` before cancelling callbacks or closing stdin. After process
+exit and teardown it requires an unchanged transcript readback. This ordering
+prevents cancellation outcomes from reaching the old CLI and adds no fabricated
+transcript marker or native pause command.
+
+The Activity records a pending checkpoint through a Workflow Update and returns
+a stopped receipt. Its heartbeat loop finishes too. Existing approval handlers
+and tool Activities continue in Temporal; new requests from the stopped attempt
+are rejected. `HybridWorkflow.resume_pending` records the intention to resume,
+and the Workflow waits for all outstanding outcomes and handlers before starting
+a replacement CLI Activity. The SDK recovery callback then persists original
+results before CLI startup. Continue-As-New uses the same stopped checkpoint and
+completed outcomes after handlers finish. If the Worker dies after checkpoint
+acknowledgment but before Activity completion, the retried Activity returns that
+receipt without creating another CLI.
+
+Missing call storage, an unfinished stream, child transcripts, or failed storage
+reads refuse suspension and preserve the live process. A changed post-stop
+readback never produces a successful suspension receipt. The host still owns
+exclusive session access and orphan cleanup after Worker SIGKILL. The experiment
+does not introduce a production suspension API or idle policy.
 
 Worker-loss recovery tests model a supervising host stopping the old CLI after
 Worker SIGKILL. Python cannot guarantee that teardown after SIGKILL itself; the
@@ -269,20 +298,20 @@ recovery code rejects subagent execution and does not attempt child restoration.
 Historical subagent probes below remain baseline evidence, outside this design.
 
 Validation uses a **non-editable local SDK 0.2.162 wheel**, built from the sibling
-feature branch (`222b09b`), with the plugin's other committed locked dependencies. The full
-plugin suite passed **161 tests**, with the optional benchmark skipped, using
-CLI **2.1.273**. All **15 main-agent recovery cases** also passed using the sibling
-SDK's current pinned CLI **2.1.285**. A disposable newest-policy dependency
-lane selected Temporal **1.34.0** and passed all **21 recovery/Workflow tests**
-and lint (Python 3.14.4, CLI 2.1.273), retaining the committed lock. The upstream SDK suite passed **1,633 tests**
-(6 optional skips), including 46 recovery cases across asyncio and Trio. Lint,
-repository conventions, 101 tooling tests, wheel/sdist checks and isolated smoke
-installs passed. The initial full plugin run
-emitted its existing unawaited-Workflow-coroutine cleanup warning. Coroutine
-disposal now bypasses Workflow handler draining, and the subsequent targeted
-locked/newest checks completed without that cleanup warning. Tests use the
-real CLI, the strict deterministic local Messages API and the pinned Temporal
-dev server without provider credentials.
+feature branch (`222b09b`), with the plugin's other committed locked dependencies.
+After adding pending suspension, the full plugin suite passed **183 tests**, with
+the optional benchmark skipped, using CLI **2.1.273**. All **22 pending-suspension
+cases** passed with both CLI **2.1.273** and the sibling SDK's pinned CLI
+**2.1.285**. The earlier 15 main-agent recovery cases also passed with 2.1.285.
+A disposable newest-policy lane selected Temporal **1.34.0** and passed all
+**43 suspension/recovery/Workflow tests** and lint (Python 3.14.4, CLI 2.1.273),
+leaving the committed lock unchanged. The upstream SDK suite passed **1,633
+tests** (6 optional skips), including 46 recovery cases across asyncio and Trio.
+Lint, repository conventions, 101 tooling tests, wheel/sdist checks and isolated
+smoke installs passed. The full plugin run still emitted the existing Temporal
+unawaited-Workflow-coroutine cleanup warning; focused checks completed without
+it. Tests use the real CLI, the strict deterministic local Messages API and the
+pinned Temporal dev server without provider credentials.
 
 To install the sibling change here without a committed path dependency:
 
@@ -294,11 +323,11 @@ make sync
 # The installer preserves the environment's bundled CLI unless --cli is supplied.
 # UV_NO_SYNC keeps uv run from replacing the local wheel with the committed lock.
 UV_NO_SYNC=1 make lint
-UV_NO_SYNC=1 make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py -n 4 -q'
+UV_NO_SYNC=1 make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py tests/hybrid/test_pending_suspension.py -n 4 -q'
 UV_NO_SYNC=1 make test PYTEST_ARGS='-n 4 -q'
 # Test another pinned binary without changing the installed SDK or dependency lock:
 HYBRID_CLI_PATH=/absolute/path/to/claude UV_NO_SYNC=1 \
-  make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py -n 4 -q'
+  make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py tests/hybrid/test_pending_suspension.py -n 4 -q'
 # Restore the published dependency environment afterwards:
 make sync
 ```

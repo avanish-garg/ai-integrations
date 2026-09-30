@@ -13,9 +13,11 @@ with workflow.unsafe.imports_passed_through():
     from tests.hybrid.models import (
         Attempt,
         BurstInput,
+        BurstResult,
         Call,
         Checkpoint,
         Entry,
+        PendingCheckpoint,
         Reply,
         Snapshot,
         State,
@@ -30,6 +32,7 @@ class HybridWorkflow:
         self.attempts: dict[int, Attempt] = {}
         self.handles: dict[str, workflow.ActivityHandle[Reply]] = {}
         self.closing = False
+        self.suspend_requested: Attempt | None = None
 
     @workflow.run
     async def run(self, state: State) -> State:
@@ -48,16 +51,36 @@ class HybridWorkflow:
         self.state = state
         size = state.burst_size or len(state.prompts)
         while state.index < len(state.prompts):
+            generation = 0
+            if state.pending is not None:
+                await workflow.wait_condition(
+                    lambda: (
+                        state.resume_requested
+                        and all(
+                            entry.outcome is not None
+                            for entry in state.ledger.values()
+                            if entry.call.attempt.burst == state.index
+                        )
+                    )
+                )
+                await workflow.wait_condition(workflow.all_handlers_finished)
+                if state.continue_on_suspend:
+                    state.continue_on_suspend = False
+                    self.closing = True
+                    workflow.continue_as_new(state)
+                generation = state.pending.attempt.number
             inp = BurstInput(
                 state.session_id,
                 state.prompts[state.index : state.index + size],
                 state.index,
                 state.checkpoint,
+                generation,
+                state.pending is not None,
             )
-            answers = await workflow.execute_activity(
+            result = await workflow.execute_activity(
                 "hybrid_burst",
                 inp,
-                result_type=list[str],
+                result_type=BurstResult,
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(seconds=3),
                 retry_policy=RetryPolicy(
@@ -65,7 +88,13 @@ class HybridWorkflow:
                 ),
                 cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
             )
-            state.answers.extend(answers)
+            if result.pending is not None:
+                if state.pending != result.pending:
+                    raise ApplicationError("unacknowledged pending suspension")
+                continue
+            state.pending = None
+            state.resume_requested = False
+            state.answers.extend(result.answers)
             state.index += len(inp.prompts)
             await workflow.wait_condition(workflow.all_handlers_finished)
             if state.continue_every and state.index < len(state.prompts):
@@ -88,11 +117,23 @@ class HybridWorkflow:
         if self.closing:
             raise ApplicationError("checkpoint is closing", non_retryable=True)
         self.attempts[attempt.burst] = attempt
+        self.suspend_requested = None
+        if (
+            self.state.pending is not None
+            and attempt.number > self.state.pending.attempt.number
+        ):
+            self.state.pending = None
+            self.state.resume_requested = False
         return self.snapshot()
 
     @workflow.update
     async def request(self, call: Call) -> Reply:
         self.check_attempt(call.attempt)
+        if (
+            self.state.pending is not None
+            and self.state.pending.attempt == call.attempt
+        ):
+            raise ApplicationError("suspended CLI attempt", non_retryable=True)
         if not call.transcript_uuid:
             raise ApplicationError(
                 "missing transcript storage proof", non_retryable=True
@@ -160,6 +201,47 @@ class HybridWorkflow:
         self.state.turns[turn.index] = turn
 
     @workflow.update
+    async def suspend(self) -> None:
+        if self.state.pending is not None:
+            return
+        attempt = self.attempts.get(self.state.index)
+        if attempt is None:
+            raise ApplicationError("no active CLI attempt", non_retryable=True)
+        self.suspend_requested = attempt
+
+    @workflow.update
+    async def acknowledge_suspension(self, checkpoint: PendingCheckpoint) -> None:
+        self.check_attempt(checkpoint.attempt)
+        if self.state.pending == checkpoint:
+            return
+        if self.suspend_requested != checkpoint.attempt:
+            raise ApplicationError("suspension was not requested", non_retryable=True)
+        expected = {
+            tid
+            for tid, entry in self.state.ledger.items()
+            if entry.call.attempt.burst == checkpoint.attempt.burst
+        }
+        pending, delivered = set(checkpoint.pending), set(checkpoint.delivered)
+        if (
+            not checkpoint.uuid
+            or not pending
+            or pending & delivered
+            or pending | delivered != expected
+        ):
+            raise ApplicationError("incomplete pending checkpoint", non_retryable=True)
+        if any(self.state.ledger[tid].outcome is None for tid in delivered):
+            raise ApplicationError("delivered call has no outcome", non_retryable=True)
+        self.state.pending = checkpoint
+        self.state.suspensions.append(checkpoint)
+        self.suspend_requested = None
+
+    @workflow.update
+    async def resume_pending(self) -> None:
+        if self.state.pending is None:
+            raise ApplicationError("no pending suspension", non_retryable=True)
+        self.state.resume_requested = True
+
+    @workflow.update
     async def acknowledge(self, checkpoint: Checkpoint) -> None:
         self.check_attempt(checkpoint.attempt)
         expected = {
@@ -180,5 +262,10 @@ class HybridWorkflow:
     @workflow.query
     def snapshot(self) -> Snapshot:
         return Snapshot(
-            self.attempts, self.state.ledger, self.state.checkpoints, self.state.turns
+            self.attempts,
+            self.state.ledger,
+            self.state.checkpoints,
+            self.state.turns,
+            self.suspend_requested,
+            self.state.pending,
         )

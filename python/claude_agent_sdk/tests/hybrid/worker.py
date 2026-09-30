@@ -29,6 +29,8 @@ async def main() -> None:
         acts.before_request = asyncio.Event()
     if os.environ.get("HYBRID_HOLD_CHECKPOINT"):
         acts.after_checkpoint = asyncio.Event()
+    if os.environ.get("HYBRID_HOLD_SUSPENSION"):
+        acts.after_suspension = asyncio.Event()
     async with Worker(
         client,
         task_queue=os.environ["HYBRID_QUEUE"],

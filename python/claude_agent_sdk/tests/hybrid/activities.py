@@ -14,6 +14,7 @@ from tests.hybrid.engine import Burst, PrototypeBlocked
 from tests.hybrid.models import (
     Attempt,
     BurstInput,
+    BurstResult,
     Call,
     Checkpoint,
     Reply,
@@ -36,6 +37,7 @@ class HybridActivities:
         self.tool_calls: list[str] = []
         self.fail_after_effect = False
         self.after_checkpoint: asyncio.Event | None = None
+        self.after_suspension: asyncio.Event | None = None
         self.before_request: asyncio.Event | None = None
         self.before_delivery: asyncio.Event | None = None
 
@@ -58,7 +60,7 @@ class HybridActivities:
         return Reply(text)
 
     @activity.defn(name="hybrid_burst")
-    async def burst(self, inp: BurstInput) -> list[str]:
+    async def burst(self, inp: BurstInput) -> BurstResult:
         async def beat() -> None:
             while True:
                 activity.heartbeat({"attempt": activity.info().attempt})
@@ -71,7 +73,7 @@ class HybridActivities:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
 
-    async def run_burst(self, inp: BurstInput) -> list[str]:
+    async def run_burst(self, inp: BurstInput) -> BurstResult:
         info = activity.info()
         assert info.workflow_id is not None
         handle = self.client.get_workflow_handle(
@@ -79,12 +81,20 @@ class HybridActivities:
         )
         attempt = Attempt(
             inp.burst,
-            info.attempt,
-            f"{info.workflow_run_id}:{info.activity_id}:{info.attempt}",
+            inp.generation + info.attempt,
+            f"{info.workflow_run_id}:{info.activity_id}:{inp.generation + info.attempt}",
         )
+        before = await handle.query(HybridWorkflow.snapshot)
+        if (
+            before.pending is not None
+            and before.pending.attempt.number > inp.generation
+        ):
+            # The CLI stopped and the Update committed, but the Activity's
+            # completion may have been lost. Return its durable receipt.
+            return BurstResult(pending=before.pending)
         snap = await handle.execute_update(HybridWorkflow.register, attempt)
         if snap.checkpoints and snap.checkpoints[-1].attempt.burst == inp.burst:
-            return snap.checkpoints[-1].answers
+            return BurstResult(snap.checkpoints[-1].answers)
         # Completed-turn recovery can resume. Pending-call recovery has no proven protocol.
         if not self.recovery and any(
             e.call.attempt.burst == inp.burst for e in snap.ledger.values()
@@ -98,7 +108,7 @@ class HybridActivities:
         async def execute(call: Call) -> Reply:
             return await handle.execute_update(HybridWorkflow.request, call)
 
-        resume = inp.checkpoint is not None
+        resume = inp.checkpoint is not None or inp.recovering
         if self.recovery and info.attempt > 1:
             # Storage may contain a requested call even if the old Worker died
             # before its request Update reached Temporal.
@@ -126,7 +136,7 @@ class HybridActivities:
         burst.before_delivery = self.before_delivery
         self.bursts.append(burst)
 
-        async def run() -> list[str]:
+        async def run() -> BurstResult:
             await burst.open()
             with (self.root / "cli-pids.jsonl").open("a") as log:
                 log.write(json.dumps({"pid": burst.pid, "worker": os.getpid()}) + "\n")
@@ -151,11 +161,52 @@ class HybridActivities:
             )
             if self.after_checkpoint is not None:
                 await self.after_checkpoint.wait()
-            return answers
+            return BurstResult(answers)
 
+        async def watch_suspension() -> BurstResult:
+            while True:
+                current = await handle.query(HybridWorkflow.snapshot)
+                accepted = {
+                    tid
+                    for tid, entry in current.ledger.items()
+                    if entry.call.attempt.burst == inp.burst
+                }
+                if (
+                    current.suspend_requested == attempt
+                    and burst.calls
+                    and accepted == set(burst.calls)
+                    and await burst.suspend_pending()
+                ):
+                    assert burst.suspended is not None
+                    await handle.execute_update(
+                        HybridWorkflow.acknowledge_suspension, burst.suspended
+                    )
+                    if self.after_suspension is not None:
+                        await self.after_suspension.wait()
+                    return BurstResult(pending=burst.suspended)
+                await asyncio.sleep(0.05)
+
+        running = asyncio.create_task(run())
+        suspension = asyncio.create_task(watch_suspension()) if self.recovery else None
         try:
-            return await run()
+            if suspension is None:
+                return await running
+            await asyncio.wait(
+                {running, suspension}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if suspension.done():
+                return await suspension
+            # Killing the CLI ends the reader before its stopped receipt is
+            # acknowledged. Let that acknowledgment finish before returning.
+            if burst.delivery.is_set():
+                return await running
+            return await suspension
         except PrototypeBlocked as exc:
             raise ApplicationError(str(exc), non_retryable=True) from exc
         finally:
+            running.cancel()
+            if suspension is not None:
+                suspension.cancel()
+                await asyncio.gather(suspension, return_exceptions=True)
+            await asyncio.gather(running, return_exceptions=True)
             await burst.close()
