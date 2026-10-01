@@ -121,16 +121,25 @@ def history_of(
 class FakeMessagesAPI:
     """A local Messages API server that answers with scripted content blocks."""
 
-    def __init__(self, decide: Decide, *, strict: bool = True) -> None:
+    def __init__(
+        self,
+        decide: Decide,
+        *,
+        strict: bool = True,
+        primary_tools: set[str] | None = None,
+    ) -> None:
         """Create the server (call :meth:`start`).
 
         Args:
             decide: Returns the assistant content blocks for a request that offers
                 durable tools. Other requests (the engine's side calls) get "ok".
             strict: Reject requests that break the tool pairing rules with a 400.
+            primary_tools: Additional native tool names that identify primary
+                model requests rather than incidental engine requests.
         """
         self.decide = decide
         self.strict = strict
+        self.primary_tools = primary_tools or set()
         self.fail_status: int | None = None
         """When set, requests that offer durable tools get this HTTP error."""
         self.fail_message = "rejected"
@@ -185,7 +194,9 @@ class FakeMessagesAPI:
                     error = {"type": "invalid_request_error", "message": problem}
                     return self.send_json({"type": "error", "error": error}, status=400)
                 tools = [str(t.get("name", "")) for t in body.get("tools") or []]
-                durable = any(t.startswith(PREFIX) for t in tools)
+                durable = any(
+                    t.startswith(PREFIX) or t in api.primary_tools for t in tools
+                )
                 if durable and api.fail_status is not None:
                     error = {
                         "type": "invalid_request_error",

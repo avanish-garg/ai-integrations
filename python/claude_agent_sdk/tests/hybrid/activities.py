@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 from temporalio import activity
 from temporalio.client import Client
@@ -17,6 +19,7 @@ from tests.hybrid.models import (
     BurstResult,
     Call,
     Checkpoint,
+    Entry,
     Reply,
     TurnCheckpoint,
 )
@@ -40,6 +43,27 @@ class HybridActivities:
         self.after_suspension: asyncio.Event | None = None
         self.before_request: asyncio.Event | None = None
         self.before_delivery: asyncio.Event | None = None
+
+    def create_burst(
+        self,
+        inp: BurstInput,
+        attempt: Attempt,
+        execute: Callable[[Call], Coroutine[Any, Any, Reply]],
+        resume: bool,
+        entries: dict[str, Entry],
+    ) -> Burst:
+        return Burst(
+            self.root,
+            self.env,
+            self.store,
+            inp.session_id,
+            attempt,
+            execute,
+            resume=resume,
+            subagents=self.subagents,
+            recovery=self.recovery,
+            recovery_entries=entries,
+        )
 
     @activity.defn(name="hybrid_tool")
     async def tool(self, call: Call) -> Reply:
@@ -106,7 +130,14 @@ class HybridActivities:
             )
 
         async def execute(call: Call) -> Reply:
-            return await handle.execute_update(HybridWorkflow.request, call)
+            # Native hooks borrow a live executor after this request schedules
+            # their Activity. A replacement joins the same accepted Update,
+            # including when the original Activity completion was lost.
+            return await handle.execute_update(
+                HybridWorkflow.request,
+                call,
+                id="native-" + call.id if call.name in {"Read", "Edit"} else None,
+            )
 
         resume = inp.checkpoint is not None or inp.recovering
         if self.recovery and info.attempt > 1:
@@ -116,17 +147,12 @@ class HybridActivities:
             # starting another model turn with replacement tool IDs.
             resume = True
 
-        burst = Burst(
-            self.root,
-            self.env,
-            self.store,
-            inp.session_id,
+        burst = self.create_burst(
+            inp,
             attempt,
             execute,
-            resume=resume,
-            subagents=self.subagents,
-            recovery=self.recovery,
-            recovery_entries={
+            resume,
+            {
                 tid: entry
                 for tid, entry in snap.ledger.items()
                 if entry.call.attempt.burst == inp.burst

@@ -220,6 +220,84 @@ make lint
 make test   # the real Claude Code engine against a local fake Messages API; no credentials
 ```
 
+## Native Read/Edit and recoverable workspace experiment (2026-09-30)
+
+The hybrid experiment now includes Claude Code's actual **Read** and **Edit**
+tools. They retain their native schemas and implementations; no MCP replacement
+tools are offered in these probes. A `PreToolUse` hook verifies the original
+native ID and stored assistant call, requests a tool Activity through the
+Workflow, then waits for that Activity's execution permit. The CLI executes the
+tool. A post-tool hook stages the workspace snapshot, and eager transcript
+mirroring captures the engine's original `tool_result` block. The shared test
+store commits that result and snapshot in one SQLite transaction before the tool
+Activity returns. Read/Edit execution is sequential because they share mutable
+workspace state.
+
+The Activity controls permission and records the outcome, but borrows its
+executor from the live CLI Activity. On retry it can reuse a committed result;
+it has no independent native executor for an unfinished call. Replacement first
+joins the original accepted tool Update before registering a new CLI attempt,
+so the outcome is acknowledged in Workflow history. This barrier also keeps
+history replay valid when the Worker lost a tool Activity's completion.
+
+The recoverable workspace is deliberately narrow: **one managed `note.txt`**,
+with bytes, file mode and a snapshot version in the shared SQLite test service.
+Tests SIGKILL the Worker, have the supervising harness stop its recorded CLI,
+delete the entire local workspace and Claude configuration directory, then
+start another Worker with a fresh configuration. It materializes the committed
+snapshot at the **same logical absolute path**, and loads the conversation from
+session storage. This models a shared service plus disposable Worker disks;
+it does not ship a production filesystem snapshotter or lease service. The
+database fences workspace/result commits; a host supervisor must still enforce
+exclusive session access and stop the old CLI before restoring the workspace.
+The probes issue one native call per model response. Concurrent native batches
+and subagents are outside this experiment.
+
+| Native capability | Result | Reproduction in `tests/hybrid/test_native_workspace.py` |
+|---|---|---|
+| Real Read/Edit, one CLI, one Activity per original native ID | **supported** | `test_native_read_edit_are_individually_scheduled`; three primary model requests and two tool Activities |
+| Original Read context survives Worker loss, allowing Edit without another Read | **supported** | `test_read_context_restores_before_native_edit`; earlier answer and transcript retained |
+| Restore committed results/workspace before Activity completion or before transcript mirroring | **supported** | `test_native_worker_loss_reuses_committed_results`; Read/Edit, both phases; original IDs/content, one native execution per call, history replay |
+| Reject a stale workspace/result writer after ownership changes | **supported** | `test_stale_native_workspace_writer_is_fenced` |
+| Execute an original pending Read/Edit after its executor is lost | **blocked** | `test_uncommitted_native_execution_blocks_recovery[Read-before-execution]` and `[Edit-before-execution]`; ledger retained, replacement CLI startup refused |
+| Finish an Edit after its local write but before committing its result/workspace | **blocked** | Same test's `[Edit-after-write]` case; uncommitted local bytes are discarded and the last committed snapshot is restored |
+| Ordinary CLI resume re-dispatches an unfinished native call | **unsupported** | `test_ordinary_resume_interrupts_pending_native_calls`; with the opt-in recovery callback disabled, all three uncommitted phases produce an engine interruption result for the original ID, with no native execution hook |
+
+Pending native suspension is refused and preserves the live process. These
+hooks do not implement the MCP bridge's result-delivery parking protocol. The
+blocked recovery cases do not ask the model to rediscover tools, synthesize
+native output, or silently repeat the Edit. Recovering those cases still needs
+a verified protocol for dispatching the original built-in call to a native
+executor. Snapshot rollback here covers only the managed local file; it cannot
+undo external effects from arbitrary Bash commands. Activity effects still
+require idempotency. Subagents remain outside this design.
+
+The ordinary-resume probe checks the engine's own interruption behavior, rather
+than inferring a limitation from the prototype's refusal to fabricate a result.
+The observed engine result is `[Request interrupted by user for tool use]` under
+the original pending ID, including after an Edit already changed local bytes.
+The callback-enabled blocker tests preserve the ledger and fail before launching
+a replacement CLI when no original native result was committed. Neither path
+claims recovery of an unfinished built-in operation.
+
+Run the native probes with the local recovery SDK wheel installed:
+
+```bash
+UV_NO_SYNC=1 make test PYTEST_ARGS='tests/hybrid/test_native_workspace.py -n 4 -q'
+```
+
+All **13 native probes pass** with the local recovery SDK `0.2.162`, both
+Claude Code CLI `2.1.273` and `2.1.285`, and with the newest allowed Temporal
+`1.34.0` dependencies in an isolated worktree. Primary results use locked
+Temporal `1.33.0` and MCP `2.2.0`. These passes include expected blocker
+reproductions, not support for every recovery phase. With published SDK
+`0.2.153`, the two baseline probes pass and the eleven recovery probes skip;
+recovery still requires the sibling's experimental wheel. The full plugin suite
+passes **196 tests**, with one opt-in benchmark skipped and strict coroutine
+cleanup warnings enabled. Lint, wheel/sdist validation, isolated installation
+smoke tests and the 101 repository tooling tests pass. No plugin CI workflow or
+public API was added.
+
 ## Main-agent recovery with the sibling SDK (2026-09-30)
 
 The current design covers **main agents only**. The sibling

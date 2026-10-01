@@ -9,6 +9,8 @@ from pathlib import Path
 from temporalio.client import Client
 from temporalio.worker import Worker
 from tests.hybrid.activities import HybridActivities
+from tests.hybrid.native import NativeActivities
+from tests.hybrid.native_store import NativeStore
 from tests.hybrid.store import TranscriptStore
 from tests.hybrid.workflows import HybridWorkflow
 
@@ -22,6 +24,8 @@ async def main() -> None:
         if key.startswith(("ANTHROPIC", "CLAUDE", "DISABLE_", "NO_PROXY", "no_proxy"))
     }
     acts = HybridActivities(client, root, env, TranscriptStore(root / "store.db"))
+    if phase := os.environ.get("HYBRID_NATIVE_PHASE"):
+        acts = NativeActivities(client, root, env, NativeStore(root, phase))
     acts.recovery = os.environ.get("HYBRID_MAIN_RECOVERY") == "1"
     if os.environ.get("HYBRID_HOLD_DELIVERY"):
         acts.before_delivery = asyncio.Event()
