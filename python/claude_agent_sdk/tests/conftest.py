@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 import time
 from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
@@ -34,7 +36,7 @@ def pytest_runtest_setup(item):  # type: ignore[reportMissingParameterType]
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Abort unless the installed plugin is the non-editable build of this checkout."""
+    """Verify the installed plugin and provision a CLI for source SDK installs."""
     if hasattr(session.config, "workerinput"):
         return
     plugin = load_plugin_meta(PLUGIN_ROOT)
@@ -50,6 +52,18 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         )
     except ProvenanceError as exc:
         pytest.exit(f"provenance guard failed: {exc}", returncode=1)
+    # Git/source SDK installs omit the CLI shipped in published wheels. Provision
+    # the tested release once in the xdist controller, before any Workers start.
+    import claude_agent_sdk
+
+    filename = "claude.exe" if os.name == "nt" else "claude"
+    bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / filename
+    local_cli = Path(sys.executable).parent / filename
+    if not bundled.is_file() and not local_cli.is_file():
+        subprocess.run(
+            [sys.executable, str(PLUGIN_ROOT / "tests/hybrid/install_cli.py")],
+            check=True,
+        )
 
 
 @pytest.fixture(scope="session")

@@ -61,6 +61,10 @@ exclude-newer-package = { temporalio = false }   # the SDK is exempt: cutover re
 link-mode = "copy"
 cache-keys = [{ file = "pyproject.toml" }, { file = "README.md" }, { file = "src/**/*" }]
 
+[tool.uv.sources]
+# Prototype-only pin: published dependency bounds still apply to built artifacts.
+claude-agent-sdk = { git = "https://github.com/brianstrauch/claude-agent-sdk-python.git", rev = "3ac4b25733d1302c89d0dadd13cab268e64d1213" }
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # Do not use log_cli since this shows logging for all tests, not just the ones

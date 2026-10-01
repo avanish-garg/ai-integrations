@@ -2,6 +2,11 @@
 
 > ⚠️ **Experimental.** The API may change.
 
+This prototype branch pins the [main-agent recovery SDK fork](https://github.com/brianstrauch/claude-agent-sdk-python/tree/feature/main-agent-recovery)
+at commit [`3ac4b25`](https://github.com/brianstrauch/claude-agent-sdk-python/commit/3ac4b25733d1302c89d0dadd13cab268e64d1213).
+See [Main-agent recovery](#main-agent-recovery-with-the-sdk-fork-2026-09-30)
+for setup and the recovery/suspension experiments.
+
 Temporal integration for Anthropic's [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), published as [`temporalio-claude-agent-sdk`](https://pypi.org/project/temporalio-claude-agent-sdk/) and imported as `temporalio.claude_agent_sdk`.
 
 - **Every durable tool call Claude makes is its own Temporal Activity.** Finished calls never run again after a crash, retries follow your retry policy, and the Activity ID (`tool-<tool_use_id>`) doubles as an idempotency key for the systems a tool touches.
@@ -510,10 +515,10 @@ cleanup warnings enabled. Lint, wheel/sdist validation, isolated installation
 smoke tests and the 101 repository tooling tests pass. No plugin CI workflow or
 public API was added.
 
-## Main-agent recovery with the sibling SDK (2026-09-30)
+## Main-agent recovery with the SDK fork (2026-09-30)
 
-The current design covers **main agents only**. The sibling
-`claude-agent-sdk-python` checkout implements an opt-in
+The current design covers **main agents only**. The
+[SDK fork](https://github.com/brianstrauch/claude-agent-sdk-python/tree/feature/main-agent-recovery) implements an opt-in
 `ClaudeAgentOptions.recover_pending_tool` callback. The hybrid test Activity uses
 that callback on retry to reconnect original native tool IDs to the Workflow
 ledger. Approval waits and already scheduled Activities remain in Temporal;
@@ -540,8 +545,9 @@ External Activity effects continue to require idempotency.
 The Workflow also records each completed user task's answer and transcript proof
 through an Update. A retry partway through a multi-task burst skips acknowledged
 tasks and retains their original answers. CLI checkpoints and Continue-As-New
-remain internal test helpers; production public APIs and dependencies are
-unchanged.
+remain internal test helpers; production public APIs and packaged registry
+dependency bounds are unchanged. This checkout pins the fork through
+`tool.uv.sources` and `uv.lock`.
 
 | Main-agent capability | Result | Reproduction |
 |---|---|---|
@@ -588,7 +594,8 @@ recovery code rejects subagent execution and does not attempt child restoration.
 Historical subagent probes below remain baseline evidence, outside this design.
 
 Validation uses a **non-editable local SDK 0.2.162 wheel**, built from the sibling
-feature branch (`222b09b`), with the plugin's other committed locked dependencies.
+feature branch (the same source tree now shared as `3ac4b25`), with the plugin's
+other committed locked dependencies.
 After adding pending suspension, the full plugin suite passed **183 tests**, with
 the optional benchmark skipped, using CLI **2.1.273**. All **22 pending-suspension
 cases** passed with both CLI **2.1.273** and the sibling SDK's pinned CLI
@@ -610,14 +617,46 @@ with clean teardown; 38 cases skip without the local recovery feature or the
 opt-in benchmark. Tests use the real CLI, the strict deterministic local Messages
 API and the pinned Temporal dev server without provider credentials.
 
-To install the sibling change here without a committed path dependency:
+To reproduce from this branch, no sibling checkout is required:
 
 ```bash
-# From python/claude_agent_sdk; make sync retains the published baseline.
+cd python/claude_agent_sdk
 make sync
+.venv/bin/python tests/hybrid/install_cli.py
+make lint
+make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py tests/hybrid/test_pending_suspension.py -n 4 -q'
+make test PYTEST_ARGS='-n 4 -q'
+```
+
+On Windows, run the helper with `.venv/Scripts/python.exe` instead.
+
+`make sync` installs SDK `0.2.162` from fork commit `3ac4b25`. Git installations
+contain no bundled Claude Code binary, so the helper extracts CLI **2.1.273**
+from the published SDK **0.2.153** wheel into this plugin's virtualenv `bin`
+directory (`Scripts` on Windows). It preserves the installed fork SDK and the
+machine's system Claude installation. The SDK finds that binary on the PATH
+provided by `make test`. This is the same SDK source tree and CLI combination
+used for the experimental recovery results above. Built wheel/sdist metadata
+continues to use the published registry dependency; the fork pin applies to
+development through uv. The pytest controller also runs the helper automatically
+when a source SDK has no bundled CLI and the virtualenv CLI is missing, so the
+shared CI test target needs no extra setup or plugin-specific job.
+
+Sharing validation (2026-10-01): the pinned fork passed **1,633 SDK tests** with
+six optional skips. The integration's full locked suite passed **226 tests**, with
+only the opt-in benchmark skipped. Automatic CLI provisioning and partial-batch
+recovery passed after deleting the virtualenv CLI. Lint, repository conventions,
+wheel/sdist checks and isolated smoke installs passed.
+
+For further SDK edits in a sibling checkout, use the existing wheel installer:
+
+```bash
+# From python/claude_agent_sdk; first install the pinned fork and test CLI.
+make sync
+.venv/bin/python tests/hybrid/install_cli.py
 .venv/bin/python tests/hybrid/install_sdk.py \
-  --sdk-dir /absolute/path/to/claude-agent-sdk-python
-# The installer preserves the environment's bundled CLI unless --cli is supplied.
+  --sdk-dir /absolute/path/to/claude-agent-sdk-python --cli .venv/bin/claude
+# On Windows pass --cli .venv/Scripts/claude.exe instead.
 # UV_NO_SYNC keeps uv run from replacing the local wheel with the committed lock.
 UV_NO_SYNC=1 make lint
 UV_NO_SYNC=1 make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py tests/hybrid/test_pending_suspension.py -n 4 -q'
@@ -625,12 +664,13 @@ UV_NO_SYNC=1 make test PYTEST_ARGS='-n 4 -q'
 # Test another pinned binary without changing the installed SDK or dependency lock:
 HYBRID_CLI_PATH=/absolute/path/to/claude UV_NO_SYNC=1 \
   make test PYTEST_ARGS='tests/hybrid/test_main_recovery.py tests/hybrid/test_pending_suspension.py -n 4 -q'
-# Restore the published dependency environment afterwards:
+# Restore the pinned fork dependency afterwards:
 make sync
 ```
 
-The recovery tests skip with the published baseline SDK, which lacks the opt-in
-API. `tests/hybrid/test_recovery.py` and the original Worker-loss probes continue
+The recovery tests run with the pinned fork. They skip when testing the
+published baseline SDK, which lacks the opt-in API.
+`tests/hybrid/test_recovery.py` and the original Worker-loss probes continue
 to verify the ordinary resume limitation with recovery disabled. The SDK change
 and the test integration are separate feature history; no plugin-specific CI,
 public suspension configuration, idle threshold or release-version change is
