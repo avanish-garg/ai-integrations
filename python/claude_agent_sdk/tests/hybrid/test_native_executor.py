@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from temporalio.client import Client, WorkflowFailureError
-from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.worker import Replayer, Worker
 from tests.helpers.fake_messages_api import FakeMessagesAPI, engine_env, history_of
 from tests.hybrid.executor_models import NativeRun
@@ -100,7 +99,7 @@ async def test_checkpointed_native_execution(client: Client, tmp_path: Path) -> 
         api.stop()
 
 
-async def test_native_validation_before_hook_blocks_checkpoint(
+async def test_native_validation_before_hook_is_durable(
     client: Client, tmp_path: Path
 ) -> None:
     store = ExecutionStore(tmp_path)
@@ -131,18 +130,16 @@ async def test_native_validation_before_hook_blocks_checkpoint(
                 id=queue,
                 task_queue=queue,
             )
-            with pytest.raises(WorkflowFailureError) as failure:
-                await asyncio.wait_for(handle.result(), 45)
-            assert isinstance(failure.value.cause, ActivityError)
-            assert isinstance(failure.value.cause.cause, ApplicationError)
-            assert "CLI validation can precede PreToolUse" in str(
-                failure.value.cause.cause
-            )
-            state = await handle.query(NativeExecutionWorkflow.snapshot)
-        assert {emitted[tid] for tid in state.results} == {"Read"}
-        rejected = set(emitted) - state.results.keys()
-        assert len(rejected) == 1 and emitted[next(iter(rejected))] == "Edit"
-        assert store.execution(next(iter(rejected))) is None
+            state = await asyncio.wait_for(handle.result(), 45)
+        assert state.answer == "NATIVE ERROR"
+        assert set(state.results) == set(emitted)
+        assert len(state.results) == 2
+        failed = next(i for i in state.intents if i.outcome_kind == "validation")
+        assert failed.name == "Edit" and state.results[failed.id]["is_error"]
+        assert store.execution(failed.id)["result"] == state.results[failed.id]  # type: ignore[index]
+        assert store.frozen(failed) and store.version() == 2
+        store.freeze(failed, store.frozen(failed))
+        assert store.version() == 2
         assert (
             store.durable_text()
             == (store.workspace / "note.txt").read_text()
@@ -153,6 +150,106 @@ async def test_native_validation_before_hook_blocks_checkpoint(
             await handle.fetch_history()
         )
     finally:
+        api.stop()
+
+
+@pytest.mark.parametrize(
+    "phase",
+    ["Edit-after-checkpoint-before-completion", "Edit-after-commit-before-completion"],
+)
+async def test_native_validation_outcome_survives_worker_loss(
+    client: Client, address: str, tmp_path: Path, phase: str
+) -> None:
+    store = ExecutionStore(tmp_path)
+    store.initialize("BEFORE\n")
+    api, emitted = native_api(tmp_path)
+    policy = api.decide
+
+    def fail_edit(body: dict[str, Any]) -> list[dict[str, Any]]:
+        blocks = policy(body)
+        for block in blocks:
+            if block.get("name") == "Edit":
+                block["input"]["old_string"] = "MISSING"
+        return blocks
+
+    api.decide = fail_edit
+    queue = "native-validation-loss-" + uuid.uuid4().hex
+    procs: list[subprocess.Popen[bytes]] = []
+    session = str(uuid.uuid4())
+    try:
+        procs.append(
+            await launch(
+                address,
+                queue,
+                tmp_path,
+                api,
+                1,
+                False,
+                native_phase=phase,
+                native_executor=True,
+            )
+        )
+        handle = await client.start_workflow(
+            NativeExecutionWorkflow.run, NativeRun(session), id=queue, task_queue=queue
+        )
+
+        async def reached() -> Any:
+            intent = store.decision(session, 1)
+            if intent is None:
+                return None
+            snapshot = await handle.query(NativeExecutionWorkflow.snapshot)
+            if "after-checkpoint" in phase:
+                return intent if len(snapshot.intents) == 1 else None
+            return intent if len(snapshot.intents) == 2 else None
+
+        intent = await until(reached)
+        frozen = store.frozen(intent)
+        outcome = store.execution(intent.id)
+        assert outcome is not None and outcome["result"]["is_error"]
+        stop_worker(procs[0], tmp_path)
+        shutil.rmtree(store.workspace)
+        shutil.rmtree(tmp_path / "machine-1", ignore_errors=True)
+        for path in tmp_path.glob("*.db"):
+            if path != store.path:
+                path.unlink()
+        procs.append(
+            await launch(
+                address,
+                queue,
+                tmp_path,
+                api,
+                2,
+                False,
+                native_phase="replacement",
+                native_executor=True,
+            )
+        )
+        state = await asyncio.wait_for(handle.result(), 45)
+        assert state.answer == "NATIVE ERROR"
+        assert set(state.results) == set(emitted)
+        assert state.intents[-1] == intent
+        assert state.results[intent.id] == outcome["result"]
+        assert store.frozen(intent) == frozen and store.version() == 2
+        assert (
+            store.durable_text()
+            == (store.workspace / "note.txt").read_text()
+            == "BEFORE\n"
+        )
+        assert len(native_requests(api)) == 3 and not api.errors
+        with store.connect() as db:
+            assert (
+                db.execute(
+                    "SELECT count(*) FROM native_events WHERE id=? AND phase='committed'",
+                    (intent.id,),
+                ).fetchone()[0]
+                == 1
+            )
+        await Replayer(workflows=[NativeExecutionWorkflow]).replay_workflow(
+            await handle.fetch_history()
+        )
+    finally:
+        for proc in procs:
+            stop_worker(proc, tmp_path)
         api.stop()
 
 

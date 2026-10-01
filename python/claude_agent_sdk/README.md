@@ -220,9 +220,118 @@ make lint
 make test   # the real Claude Code engine against a local fake Messages API; no credentials
 ```
 
-## Checkpointed native tool Activity experiment (2026-09-30)
+## Bounded native call replay experiment (2026-09-30)
 
-A second test-only runner, `NativeExecutionWorkflow`, gives **Read** and **Edit**
+`NativeReplayWorkflow` addresses the three blockers in the earlier checkpointed
+runner for **main-agent Read/Edit**: whole native batches, errors produced before
+`PreToolUse`, and execution without model continuation. Subagents remain excluded.
+This is a test-only adapter around the published SDK and real Claude Code CLI;
+it does not modify the compiled engine or add a production public API.
+
+The model Activity runs one ordinary CLI turn with the original native tool
+schemas. Its preparation hook denies execution. Eager mirroring writes the real
+assistant calls to an isolated attempt store. The shared SQLite service then
+atomically publishes the whole original assistant batch and immutable receipts
+containing each original ID, arguments, transcript UUID and source digest. It
+discards this preparation's denial and validation artifacts. Temporal records
+all accepted receipts before scheduling `tool-<original ID>` Activities. Once a
+batch is accepted, recovery never asks a provider to regenerate its calls.
+
+Each tool Activity materializes an isolated execution context from the durable
+conversation. It removes the unresolved calls from that private copy and keeps
+completed calls and their real native results, including the Read metadata Edit
+needs. A local Messages response cache returns the **exact recorded assistant
+tool block**, with its original ID and arguments. The regular CLI turn executes
+the native tool and stops at `max_turns=1`. The cache invokes no provider model.
+The Activity verifies one cached response, the original call identity, the
+bounded-turn result and the actual native outcome before publication. Validation
+errors are genuine native results produced inside this independently retried
+Activity, even when the engine skips its permission hook.
+
+One transaction publishes the real executor's result carrier (including native
+`toolUseResult` metadata), the exact `tool_result`, and the next workspace snapshot.
+Only the carrier's parent UUID is attached to the canonical conversation head;
+the result content and metadata stay unchanged. The original canonical batch
+stays intact. No engine deferral markers or tool results are invented, and calls
+are never matched by arguments or regenerated IDs. This **does** shape a private
+execution transcript and deliver native results back into a conversation; it
+is not a native prepare/execute/commit RPC implemented by the engine.
+
+Read-only batches execute concurrently against one immutable snapshot. Batches
+containing Edit execute in original order, preserving prior Read context and
+committed mutations. The managed workspace is still one regular `note.txt`,
+preserving bytes, mode and modification time. Attempt fencing rejects stale
+publication; retries return committed outcomes or restore the last committed
+snapshot before native execution. A supervising host stops orphan CLIs before
+replacement work uses their workspace.
+
+| Capability | Result | Reproduction in `tests/hybrid/test_native_replay.py` |
+|---|---|---|
+| Three native Reads from one response, concurrent execution, original IDs | **supported** | `test_native_replay_boundaries[parallel]`; all three permission callbacks overlap before any execution finishes |
+| Read and Edit in one original response, with native Read context | **supported** | Same test's `[mixed]`; two real model requests, no rediscovery of an omitted call |
+| Two native Edits in one response | **supported** | Same test's `[edits]`; original order, preserved Read/Edit metadata and three committed workspace versions |
+| Native validation error as an independent durable Activity result | **supported** | Same test's `[validation]`; a missing Edit match keeps the actual error under its original ID |
+| Execution without model continuation or HTTP-error guard | **supported** | Every boundary test verifies one cached response per executor attempt and the bounded CLI result |
+| Worker loss before execution, after local Edit, or after publication | **supported** | `test_native_replay_worker_loss`; original accepted IDs and outcomes survive deletion of local workspace, profiles and attempt transcripts |
+| Worker loss during a partially completed batch | **supported** | Same test's `partial-batch` case; one cached outcome, two pending original IDs, no repeat of the completed Read |
+| Worker loss after the first Edit in a mutable batch | **supported** | Same test's `partial-edits` case; restore the first mutation and complete the second original ID without rerunning committed calls |
+| Worker loss after publishing a native validation error | **supported** | Same test's invalid Edit `after-commit-before-completion` case; unchanged file and cached original error |
+| Lost batch-preparation acknowledgment | **supported** | Same test's Read `after-checkpoint-before-completion` case; retry returns the accepted receipt without another model request |
+| Failed atomic outcome publication | **supported** | Boundary test's `[publication]`; failed transaction rolls back result/transcript/snapshot, retry executes original Edit against restored input |
+| Preparation hook failure | **supported** | `test_preparation_hook_failure_denies_native_edit`; explicit denial, no accepted Edit or file mutation, committed Read preserved |
+
+The single Read/Edit run starts **five CLI processes**, makes **three actual
+primary model requests** and **two local cached-response requests**, with zero
+refused continuation requests. The three-Read batch starts five CLIs, makes two
+actual model requests and three cached requests. Cache transport requests are
+reported separately because they do not execute a model. A failed publication or
+loss before publication may repeat native execution and its cache request.
+
+This closes the three experimental blockers within the tested scope. It does
+not establish full production durability for every Claude Code tool or preserve
+the original hybrid's process reuse. General filesystem state, permissions,
+other built-ins, arbitrary Bash effects and production shared storage need their
+own protocols. Activity side effects require idempotency or reconciliation;
+the Edit rollback tests establish one published outcome, not exactly-once
+external execution. Production idle thresholds and public suspension settings
+remain deferred.
+
+The direct deferred-resume engine behavior is still reproducible:
+`test_startup_stop_hook_does_not_bound_deferred_resume` in
+`tests/hybrid/test_native_boundaries.py` shows that startup PostToolUse stop hooks
+do not prevent continuation, and PostToolBatch does not run on that path.
+`test_cached_native_call_turn_is_bounded` demonstrates the ordinary-turn boundary
+used by the new adapter. The engine also documents that
+[native deferral only supports one call](https://code.claude.com/docs/en/hooks#defer-a-tool-call-for-later).
+The adapter avoids deferred auto-resume entirely.
+
+```bash
+make sync
+make test PYTEST_ARGS='tests/hybrid/test_native_replay.py tests/hybrid/test_native_boundaries.py -n 3 -q'
+```
+
+All **30 native capability and boundary probes** pass with the locked published
+SDK `0.2.153` / CLI `2.1.273` / Temporal `1.33.0`, the newest allowed SDK
+`0.2.154` / CLI `2.1.274` / Temporal `1.34.0`, and that newest SDK with CLI
+`2.1.285`. This includes the 14 bounded replay cases, three engine boundary
+probes, and 13 earlier checkpointed executor cases. The new adapter requires no
+experimental SDK option.
+
+The complete locked regression run passes **177 tests**, with **49 skips** for
+experimental-SDK recovery cases and the opt-in benchmark. The subsequently added
+preparation-failure probe and six bounded-turn scenarios also pass separately.
+With the sibling
+recovery SDK `0.2.162` / CLI `2.1.273`, the full regression run passed **223 tests**
+with one benchmark skip, and the two subsequently added mutable-batch probes
+also pass. Strict Temporal handler and coroutine cleanup warnings remain enabled.
+Locked and newest lint, wheel/sdist checks, isolated artifact installation smoke
+tests, repository conventions, and all **101 tooling tests** pass. The primary
+environment was restored to the committed lockfile. No dependency manifest,
+public API, CI workflow or sibling SDK changes are part of this extension.
+
+## Earlier checkpointed native tool Activity experiment (2026-09-30)
+
+The earlier test-only runner, `NativeExecutionWorkflow`, gives **Read** and **Edit**
 independent native executors. It recovers calls that the live-hook experiment
 below must block, provided the CLI created a single-call checkpoint before
 Temporal accepted the tool intent. It uses the real native schemas, executor
@@ -269,7 +378,7 @@ not depend on a resume hook for recovery identity or failure injection.
 | Checkpoint publication and a lost model Activity acknowledgment | **supported** | `test_native_checkpoint_receipt_survives_worker_loss` and `test_unpublished_native_checkpoint_is_discarded_after_worker_loss` |
 | Failed atomic result/workspace/transcript publication | **supported** | `test_failed_native_publication_retries_from_checkpoint`; injected failure rolls back all three, retry restores original input |
 | Native batches | **blocked** | `test_native_checkpoint_rejects_batches_before_execution`; reject the response before accepting intents or changing the workspace |
-| Native validation errors before deferral | **blocked** | `test_native_validation_before_hook_blocks_checkpoint`; missing Edit match produces an engine error before `PreToolUse`, so no independent checkpoint exists; Workflow fails explicitly |
+| Native validation errors before deferral | **supported** | `test_native_validation_before_hook_is_durable` and `test_native_validation_outcome_survives_worker_loss`; publish the real error, unchanged snapshot and receipt atomically, and cache the terminal answer |
 | Native execution that exits without attempting model continuation | **unsupported** | Every successful executor probe records the refused continuation; the test endpoint remains necessary |
 | Recover an ordinary, uncheckpointed pending native call | **blocked** | The earlier live-hook `test_ordinary_resume_interrupts_pending_native_calls` still produces interruption results; this runner changes the acceptance protocol rather than repairing such sessions |
 
@@ -308,14 +417,14 @@ make test PYTEST_ARGS='tests/hybrid/test_native_executor.py -n 4 -q'
 UV_NO_SYNC=1 make test PYTEST_ARGS='tests/hybrid/test_native_executor.py -n 4 -q'
 ```
 
-All **11 capability probes pass** with the locked published SDK `0.2.153`,
+The original **11 capability probes passed** with the locked published SDK `0.2.153`,
 CLI `2.1.273`, Temporal `1.33.0` and MCP `2.2.0`. They also pass with the newest
 allowed published SDK `0.2.154`, its CLI `2.1.274` and Temporal `1.34.0`, and with
 the sibling recovery SDK `0.2.162` using CLIs `2.1.273` and `2.1.285`. The new
 runner needs no experimental SDK option. Lint passes in the locked, newest and
 experimental environments. These passes include the explicit blocker probes.
 
-The full suite with the local recovery SDK passes **207 tests**, with one opt-in
+Before the bounded replay extension, the full suite with the local recovery SDK passed **207 tests**, with one opt-in
 benchmark skipped and strict Temporal handler/coroutine cleanup warnings
 enabled. Wheel/sdist validation, isolated installation smoke tests, repository
 conventions and all 101 tooling tests pass. The original live-hook and main-agent

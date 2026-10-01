@@ -13,7 +13,10 @@ from tests.hybrid.executor_store import ExecutionStore
 from tests.hybrid.executor_workflow import NativeExecutionWorkflow
 from tests.hybrid.native import NativeActivities
 from tests.hybrid.native_executor import CheckpointActivities
+from tests.hybrid.native_replay import ReplayActivities
 from tests.hybrid.native_store import NativeStore
+from tests.hybrid.replay_store import ReplayStore
+from tests.hybrid.replay_workflow import NativeReplayWorkflow
 from tests.hybrid.store import TranscriptStore
 from tests.hybrid.workflows import HybridWorkflow
 
@@ -26,6 +29,19 @@ async def main() -> None:
         for key, value in os.environ.items()
         if key.startswith(("ANTHROPIC", "CLAUDE", "DISABLE_", "NO_PROXY", "no_proxy"))
     }
+    if os.environ.get("HYBRID_NATIVE_REPLAY"):
+        replay = ReplayActivities(
+            root, env, ReplayStore(root, os.environ.get("HYBRID_NATIVE_PHASE", "live"))
+        )
+        async with Worker(
+            client,
+            task_queue=os.environ["HYBRID_QUEUE"],
+            workflows=[NativeReplayWorkflow],
+            activities=[replay.decide, replay.execute],
+        ):
+            print("worker ready", flush=True)
+            await asyncio.Event().wait()
+        return
     acts = HybridActivities(client, root, env, TranscriptStore(root / "store.db"))
     if phase := os.environ.get("HYBRID_NATIVE_PHASE"):
         acts = NativeActivities(client, root, env, NativeStore(root, phase))

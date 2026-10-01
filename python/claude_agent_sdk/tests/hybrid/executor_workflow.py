@@ -46,6 +46,9 @@ class NativeExecutionWorkflow:
             # The native block, including its original ID, is the outcome.
             state.results[intent.id] = json.loads(reply.text)
             state.index += 1
+            if intent.outcome_kind == "validation" and decision.answer:
+                state.answer = decision.answer
+                return state
 
     @workflow.query
     def snapshot(self) -> NativeRun:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass
@@ -16,6 +16,8 @@ class NativeIntent:
     version: int
     transcript_uuid: str
     checkpoint_uuid: str
+    outcome_kind: Literal["deferred", "validation"] = "deferred"
+    answer: str = ""
 
 
 @dataclass

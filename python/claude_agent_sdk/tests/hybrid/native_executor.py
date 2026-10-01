@@ -12,7 +12,7 @@ import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Generic, TypeVar, cast
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -25,6 +25,7 @@ from claude_agent_sdk import (
     SessionKey,
     SessionStoreEntry,
     StreamEvent,
+    TextBlock,
     ToolUseBlock,
 )
 from claude_agent_sdk._internal.session_resume import (
@@ -39,6 +40,7 @@ from tests.helpers.fake_messages_api import FakeMessagesAPI, engine_env
 from tests.hybrid.executor_models import NativeDecision, NativeIntent
 from tests.hybrid.executor_store import ExecutionStore
 from tests.hybrid.models import Attempt, Call, Reply
+from tests.hybrid.native_store import NativeStore
 from tests.hybrid.store import TranscriptStore
 
 CONTINUATION_REFUSED = "native executor model continuation refused"
@@ -114,8 +116,11 @@ class ExecutionMirror(TranscriptStore):
                 self.published = True
 
 
-class CheckpointActivities:
-    def __init__(self, root: Path, env: dict[str, str], store: ExecutionStore) -> None:
+StoreType = TypeVar("StoreType", bound=NativeStore)
+
+
+class NativeCLIActivities(Generic[StoreType]):
+    def __init__(self, root: Path, env: dict[str, str], store: StoreType) -> None:
         self.root, self.env, self.store = root, env, store
         self.recorded: set[int] = set()
 
@@ -158,13 +163,37 @@ class CheckpointActivities:
             include_partial_messages=True,
         )
 
+
+class CheckpointActivities(NativeCLIActivities[ExecutionStore]):
+    async def publish_checkpoint(
+        self, intent: NativeIntent, entries: list[SessionStoreEntry]
+    ) -> NativeDecision:
+        for position, event in (
+            ("before-checkpoint-publication", "checkpoint-unpublished"),
+            ("after-checkpoint-before-completion", "checkpointed"),
+        ):
+            if position.startswith("after"):
+                await asyncio.to_thread(self.store.freeze, intent, entries)
+            if self.store.phase == intent.name + "-" + position:
+                with self.store.connect() as db:
+                    db.execute(
+                        "INSERT INTO native_events(id,phase,owner) VALUES (?,?,?)",
+                        (intent.id, event, self.store.owner),
+                    )
+                await self.store.held.wait()
+        return NativeDecision(
+            intent.session_id, intent.index, intent, answer=intent.answer
+        )
+
     @activity.defn(name="native_decision")
     async def decide(self, inp: NativeDecision) -> NativeDecision:
         async with heartbeating():
             cached = self.store.decision(inp.session_id, inp.index)
             if cached is not None:
                 self.store.frozen(cached)
-                return NativeDecision(inp.session_id, inp.index, cached)
+                return NativeDecision(
+                    inp.session_id, inp.index, cached, answer=cached.answer
+                )
             attempt = self.attempt(inp.index, False)
             await asyncio.to_thread(self.store.checkout, attempt)
             key = self.store.key(inp.session_id)
@@ -175,9 +204,13 @@ class CheckpointActivities:
             observed: dict[str, tuple[str, dict[str, Any]]] = {}
             complete = asyncio.Event()
             failure: list[str] = []
+            invoked: set[str] = set()
+            answer = ""
 
             async def defer(data: Any, tid: str | None, context: Any) -> Any:
                 del context
+                if tid:
+                    invoked.add(tid)
                 try:
                     await asyncio.wait_for(complete.wait(), 5)
                     if (
@@ -223,6 +256,14 @@ class CheckpointActivities:
                 await client.query("native" if inp.index == 0 else "")
                 async for message in client.receive_response():
                     if isinstance(message, AssistantMessage):
+                        if observed and all(
+                            isinstance(b, TextBlock) for b in message.content
+                        ):
+                            answer = "".join(
+                                b.text
+                                for b in message.content
+                                if isinstance(b, TextBlock)
+                            )
                         for block in message.content:
                             if isinstance(block, ToolUseBlock):
                                 observed[block.id] = (block.name, dict(block.input))
@@ -245,11 +286,43 @@ class CheckpointActivities:
             assert entries is not None
             if result.deferred_tool_use is None:
                 if observed:
-                    raise ApplicationError(
-                        "native tool completed without an engine checkpoint; "
-                        "CLI validation can precede PreToolUse",
-                        non_retryable=True,
+                    if len(observed) != 1:
+                        raise ApplicationError(
+                            "native validation requires one verified call",
+                            non_retryable=True,
+                        )
+                    tid, (name, arguments) = next(iter(observed.items()))
+                    errors = self.store._native_results(entries, tid)
+                    if (
+                        tid in invoked
+                        or name not in {"Read", "Edit"}
+                        or Path(arguments["file_path"]).resolve()
+                        != self.store.workspace / "note.txt"
+                        or len(errors) != 1
+                        or not errors[0].get("is_error")
+                    ):
+                        raise ApplicationError(
+                            "native call completed without a verified validation outcome",
+                            non_retryable=True,
+                        )
+                    uid, subpath = await mirror.wait_call(key, tid, name, arguments, 5)
+                    assert not subpath
+                    head = next(
+                        str(e.get("uuid")) for e in reversed(entries) if e.get("uuid")
                     )
+                    intent = NativeIntent(
+                        tid,
+                        name,
+                        arguments,
+                        inp.session_id,
+                        inp.index,
+                        self.store.version(),
+                        uid,
+                        head,
+                        outcome_kind="validation",
+                        answer=answer,
+                    )
+                    return await self.publish_checkpoint(intent, entries)
                 await asyncio.to_thread(
                     self.store.publish_decision, inp.session_id, entries
                 )
@@ -291,22 +364,7 @@ class CheckpointActivities:
                 uid,
                 head,
             )
-            if self.store.phase == name + "-before-checkpoint-publication":
-                with self.store.connect() as db:
-                    db.execute(
-                        "INSERT INTO native_events(id,phase,owner) VALUES (?,'checkpoint-unpublished',?)",
-                        (intent.id, self.store.owner),
-                    )
-                await self.store.held.wait()
-            await asyncio.to_thread(self.store.freeze, intent, entries)
-            if self.store.phase == name + "-after-checkpoint-before-completion":
-                with self.store.connect() as db:
-                    db.execute(
-                        "INSERT INTO native_events(id,phase,owner) VALUES (?,'checkpointed',?)",
-                        (intent.id, self.store.owner),
-                    )
-                await self.store.held.wait()
-            return NativeDecision(inp.session_id, inp.index, intent)
+            return await self.publish_checkpoint(intent, entries)
 
     @activity.defn(name="native_execution")
     async def execute(self, intent: NativeIntent) -> Reply:
@@ -316,6 +374,8 @@ class CheckpointActivities:
             await asyncio.to_thread(self.store.checkout, attempt)
             cached = self.store.execution(intent.id)
             if cached and cached["result"] is not None:
+                if self.store.phase == intent.name + "-after-commit-before-completion":
+                    await self.store.held.wait()
                 return Reply(
                     json.dumps(cached["result"], sort_keys=True),
                     bool(cached["result"].get("is_error")),

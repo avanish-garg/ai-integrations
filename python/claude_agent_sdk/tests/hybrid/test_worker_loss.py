@@ -39,6 +39,7 @@ async def launch(
     suspension_hold: bool = False,
     native_phase: str | None = None,
     native_executor: bool = False,
+    native_replay: bool = False,
 ) -> subprocess.Popen[bytes]:
     log = root / f"worker-{machine}.log"
     env = {
@@ -62,6 +63,8 @@ async def launch(
         env["HYBRID_NATIVE_PHASE"] = native_phase
     if native_executor:
         env["HYBRID_NATIVE_EXECUTOR"] = "1"
+    if native_replay:
+        env["HYBRID_NATIVE_REPLAY"] = "1"
     with log.open("wb") as out:
         proc = subprocess.Popen(
             [sys.executable, "-m", "tests.hybrid.worker"],
