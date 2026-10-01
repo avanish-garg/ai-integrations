@@ -9,7 +9,10 @@ from pathlib import Path
 from temporalio.client import Client
 from temporalio.worker import Worker
 from tests.hybrid.activities import HybridActivities
+from tests.hybrid.executor_store import ExecutionStore
+from tests.hybrid.executor_workflow import NativeExecutionWorkflow
 from tests.hybrid.native import NativeActivities
+from tests.hybrid.native_executor import CheckpointActivities
 from tests.hybrid.native_store import NativeStore
 from tests.hybrid.store import TranscriptStore
 from tests.hybrid.workflows import HybridWorkflow
@@ -35,6 +38,21 @@ async def main() -> None:
         acts.after_checkpoint = asyncio.Event()
     if os.environ.get("HYBRID_HOLD_SUSPENSION"):
         acts.after_suspension = asyncio.Event()
+    if os.environ.get("HYBRID_NATIVE_EXECUTOR"):
+        executor = CheckpointActivities(
+            root,
+            env,
+            ExecutionStore(root, os.environ.get("HYBRID_NATIVE_PHASE", "live")),
+        )
+        async with Worker(
+            client,
+            task_queue=os.environ["HYBRID_QUEUE"],
+            workflows=[NativeExecutionWorkflow],
+            activities=[executor.decide, executor.execute],
+        ):
+            print("worker ready", flush=True)
+            await asyncio.Event().wait()
+        return
     async with Worker(
         client,
         task_queue=os.environ["HYBRID_QUEUE"],

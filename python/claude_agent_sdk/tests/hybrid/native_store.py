@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import shutil
 import stat
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -49,6 +51,7 @@ class NativeStore(TranscriptStore):
             "note.txt": {
                 "data": base64.b64encode(text.encode()).decode(),
                 "mode": 0o640,
+                "mtime_ns": time.time_ns(),
             }
         }
         with self.connect() as db:
@@ -83,6 +86,8 @@ class NativeStore(TranscriptStore):
             path = self.workspace / name
             path.write_bytes(base64.b64decode(entry["data"]))
             path.chmod(entry["mode"])
+            if "mtime_ns" in entry:
+                os.utime(path, ns=(entry["mtime_ns"], entry["mtime_ns"]))
 
     def prepare(self, call: Call) -> None:
         if call.name not in {"Read", "Edit"} or call.subpath:
@@ -142,6 +147,7 @@ class NativeStore(TranscriptStore):
             "note.txt": {
                 "data": base64.b64encode(path.read_bytes()).decode(),
                 "mode": stat.S_IMODE(path.stat().st_mode),
+                "mtime_ns": path.stat().st_mtime_ns,
             }
         }
         with self.connect() as db:

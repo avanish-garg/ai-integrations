@@ -220,6 +220,107 @@ make lint
 make test   # the real Claude Code engine against a local fake Messages API; no credentials
 ```
 
+## Checkpointed native tool Activity experiment (2026-09-30)
+
+A second test-only runner, `NativeExecutionWorkflow`, gives **Read** and **Edit**
+independent native executors. It recovers calls that the live-hook experiment
+below must block, provided the CLI created a single-call checkpoint before
+Temporal accepted the tool intent. It uses the real native schemas, executor
+and output; there is no MCP substitute or model request to regenerate an
+accepted call. Subagents remain excluded.
+
+The model Activity defers its one native call through the existing engine
+mechanism. Its transcript lives in a disposable attempt store until the shared
+SQLite service commits the actual engine checkpoint and its immutable recovery
+receipt in one transaction. The receipt records the original ID, arguments,
+transcript UUID and input workspace version. The Workflow records that receipt
+in history before scheduling `native_execution` with Activity ID
+`tool-<original ID>`. A lost Activity acknowledgment returns the stored receipt.
+A crash before publication discards the attempt; the model Activity may retry
+with a different, unaccepted ID, but no tool executor has run.
+
+The tool Activity restores the committed workspace and materializes the frozen
+engine checkpoint into a fresh CLI profile using the SDK's resume helpers.
+That CLI executes the original deferred native call. An isolated transcript
+mirror captures its actual result, including Read context required by Edit.
+One transaction publishes the engine's entries through that result, its exact
+`tool_result` block and the next workspace snapshot. An Activity retry returns
+this cached outcome if publication succeeded. Otherwise it discards local
+writes and resumes the same checkpoint against the original input snapshot.
+The workspace preserves the managed file's **bytes, mode and modification
+time**; restoring modification time avoids a false Edit file-change warning.
+
+This is a workaround for a missing execute-tool boundary. The resumed CLI also
+tries to continue to the model. A separate local Messages endpoint refuses that
+request with HTTP 400, before any model executes. The prototype verifies that
+the native result was committed and excludes the later API-error entries from
+the canonical conversation. `max_turns`, a budget limit and a post-tool stop
+hook did not establish a reliable tool-only exit in the exploratory probes.
+Deferred auto-execution can also precede SDK hook initialization, so the runner
+validates the stored native call and engine deferral before spawning; it does
+not depend on a resume hook for recovery identity or failure injection.
+
+| Checkpointed capability | Result | Reproduction in `tests/hybrid/test_native_executor.py` |
+|---|---|---|
+| Separate native Read/Edit Activities with original IDs and Read context | **supported** | `test_checkpointed_native_execution`; real built-ins, two tool Activities, history replay |
+| Worker loss before native execution | **supported** | `test_checkpointed_native_executor_survives_worker_loss[Read-before-execution]` and `[Edit-before-execution]` |
+| Worker loss after an Edit writes locally, before publication | **supported** | Same test's `[Edit-after-write]`; restore original snapshot, execute original ID again, publish once |
+| Worker loss after result/workspace publication but before Activity completion | **supported** | Same test's Read/Edit `after-commit-before-completion` cases; cached original outcomes, no repeated native execution |
+| Checkpoint publication and a lost model Activity acknowledgment | **supported** | `test_native_checkpoint_receipt_survives_worker_loss` and `test_unpublished_native_checkpoint_is_discarded_after_worker_loss` |
+| Failed atomic result/workspace/transcript publication | **supported** | `test_failed_native_publication_retries_from_checkpoint`; injected failure rolls back all three, retry restores original input |
+| Native batches | **blocked** | `test_native_checkpoint_rejects_batches_before_execution`; reject the response before accepting intents or changing the workspace |
+| Native validation errors before deferral | **blocked** | `test_native_validation_before_hook_blocks_checkpoint`; missing Edit match produces an engine error before `PreToolUse`, so no independent checkpoint exists; Workflow fails explicitly |
+| Native execution that exits without attempting model continuation | **unsupported** | Every successful executor probe records the refused continuation; the test endpoint remains necessary |
+| Recover an ordinary, uncheckpointed pending native call | **blocked** | The earlier live-hook `test_ordinary_resume_interrupts_pending_native_calls` still produces interruption results; this runner changes the acceptance protocol rather than repairing such sessions |
+
+Each Worker-loss probe stops the Worker and its recorded CLI, deletes the local
+workspace and configuration, and resumes on a replacement Worker. Tool-loss
+probes also delete every disposable attempt transcript. Replacement CLIs receive
+fresh profiles materialized from the shared service and accepted checkpoints.
+SQLite ownership and workspace version checks fence publication; the
+supervising host must still stop orphan CLIs and
+enforce exclusive workspace access. SQLite here models a shared transactional
+service; it is not a shipped production backend or a general filesystem store.
+
+The no-failure Read/Edit run starts **five CLI processes**: three model Activities
+and two native executor Activities. It makes three primary model requests, plus
+two to four locally refused continuation attempts in the observed runs. The
+earlier hybrid live-hook path uses one process for that run. This experiment
+gains independently retryable native executors at the cost of process reuse;
+it is not a production hybrid replacement. An upstream protocol would need
+tool-only execution, reliable
+initialization ordering, checkpointed validation outcomes and native batch
+restoration to retain both durability and process reuse.
+
+Rollback covers the managed local file only. The Edit-after-write probe executes
+twice against restored input and publishes once; it does **not** establish
+exactly-once external execution. Arbitrary Bash effects still need idempotency
+or reconciliation, and external session/workspace storage remains required.
+These results do not justify a full native durability claim or a production
+refactor yet. No public API, dependency policy or CI workflow changes were made.
+
+Run this runner with published dependencies or the local recovery SDK:
+
+```bash
+make sync
+make test PYTEST_ARGS='tests/hybrid/test_native_executor.py -n 4 -q'
+# Keep an already installed experimental SDK wheel when testing that lane:
+UV_NO_SYNC=1 make test PYTEST_ARGS='tests/hybrid/test_native_executor.py -n 4 -q'
+```
+
+All **11 capability probes pass** with the locked published SDK `0.2.153`,
+CLI `2.1.273`, Temporal `1.33.0` and MCP `2.2.0`. They also pass with the newest
+allowed published SDK `0.2.154`, its CLI `2.1.274` and Temporal `1.34.0`, and with
+the sibling recovery SDK `0.2.162` using CLIs `2.1.273` and `2.1.285`. The new
+runner needs no experimental SDK option. Lint passes in the locked, newest and
+experimental environments. These passes include the explicit blocker probes.
+
+The full suite with the local recovery SDK passes **207 tests**, with one opt-in
+benchmark skipped and strict Temporal handler/coroutine cleanup warnings
+enabled. Wheel/sdist validation, isolated installation smoke tests, repository
+conventions and all 101 tooling tests pass. The original live-hook and main-agent
+MCP recovery probes remain part of that suite.
+
 ## Native Read/Edit and recoverable workspace experiment (2026-09-30)
 
 The hybrid experiment now includes Claude Code's actual **Read** and **Edit**
@@ -241,8 +342,9 @@ so the outcome is acknowledged in Workflow history. This barrier also keeps
 history replay valid when the Worker lost a tool Activity's completion.
 
 The recoverable workspace is deliberately narrow: **one managed `note.txt`**,
-with bytes, file mode and a snapshot version in the shared SQLite test service.
-Tests SIGKILL the Worker, have the supervising harness stop its recorded CLI,
+with bytes, file mode, modification time and a snapshot version in the shared
+SQLite test service. Tests SIGKILL the Worker, have the supervising harness stop
+its recorded CLI,
 delete the entire local workspace and Claude configuration directory, then
 start another Worker with a fresh configuration. It materializes the committed
 snapshot at the **same logical absolute path**, and loads the conversation from
@@ -266,9 +368,10 @@ and subagents are outside this experiment.
 Pending native suspension is refused and preserves the live process. These
 hooks do not implement the MCP bridge's result-delivery parking protocol. The
 blocked recovery cases do not ask the model to rediscover tools, synthesize
-native output, or silently repeat the Edit. Recovering those cases still needs
-a verified protocol for dispatching the original built-in call to a native
-executor. Snapshot rollback here covers only the managed local file; it cannot
+native output, or silently repeat the Edit. The checkpointed runner above
+provides an alternative protocol for new single-call intents. Ordinary pending
+calls accepted by this live-hook path still need a verified native recovery
+protocol. Snapshot rollback here covers only the managed local file; it cannot
 undo external effects from arbitrary Bash commands. Activity effects still
 require idempotency. Subagents remain outside this design.
 
@@ -292,8 +395,8 @@ Claude Code CLI `2.1.273` and `2.1.285`, and with the newest allowed Temporal
 Temporal `1.33.0` and MCP `2.2.0`. These passes include expected blocker
 reproductions, not support for every recovery phase. With published SDK
 `0.2.153`, the two baseline probes pass and the eleven recovery probes skip;
-recovery still requires the sibling's experimental wheel. The full plugin suite
-passes **196 tests**, with one opt-in benchmark skipped and strict coroutine
+recovery still requires the sibling's experimental wheel. The earlier full
+plugin suite passed **196 tests**, with one opt-in benchmark skipped and strict coroutine
 cleanup warnings enabled. Lint, wheel/sdist validation, isolated installation
 smoke tests and the 101 repository tooling tests pass. No plugin CI workflow or
 public API was added.
