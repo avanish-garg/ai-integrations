@@ -36,7 +36,7 @@ def test_lane_names_match_ci_workflow_job_names() -> None:
     lane_jobs = {
         job["name"]
         for job in workflow["jobs"].values()
-        if isinstance(job, dict) and str(job.get("uses", "")).endswith("_python-plugin.yml")
+        if isinstance(job, dict) and str(job.get("uses", "")).endswith(("_python-plugin.yml", "_java-plugin.yml"))
     }
     assert lane_jobs == set(nightly_report.LANE_KEY), (
         "ci.yml renamed a Python lane job; update JOB_RE/LANE_KEY in scripts/ci/nightly_report.py"
@@ -44,3 +44,12 @@ def test_lane_names_match_ci_workflow_job_names() -> None:
     for lane in lane_jobs:
         match = nightly_report.JOB_RE.match(f"{lane} (fakeplug) / fakeplug (ubuntu-latest, py3.14)")
         assert match is not None and match.group("plugin") == "fakeplug"
+
+
+def test_java_failures_have_a_distinct_lane() -> None:
+    failing, passing = nightly_report.classify([
+        _job("Java (temporal-spring-ai) / temporal-spring-ai (windows-latest, java21)", "failure"),
+        _job("Java (temporal-spring-ai) / matrix", "success"),
+    ])
+    assert failing == {("java-locked", "temporal-spring-ai")}
+    assert not passing

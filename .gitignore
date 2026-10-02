@@ -10,6 +10,9 @@ __pycache__/
 dist/
 junit/
 *.log
+.gradle/
+build/
+java/_cache/
 
 # Editors / OS
 .DS_Store
@@ -19,4 +22,3 @@ junit/
 
 # Local-only agent notes (see AGENTS.md)
 CLAUDE.local.md
-

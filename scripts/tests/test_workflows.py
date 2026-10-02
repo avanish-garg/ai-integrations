@@ -48,9 +48,11 @@ def test_ci_status_is_the_fan_in() -> None:
     doc = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())
     status = doc["jobs"]["ci-status"]
     assert status["if"] == "always()"
-    assert set(status["needs"]) == {"changes", "conventions", "python", "python-lowest"}
+    assert set(status["needs"]) == {"changes", "conventions", "python", "python-lowest", "java"}
     assert doc["jobs"]["python"]["uses"] == "./.github/workflows/_python-plugin.yml"
     assert "needs.changes.result == 'success'" in doc["jobs"]["python"]["if"]
+    assert doc["jobs"]["java"]["uses"] == "./.github/workflows/_java-plugin.yml"
+    assert "needs.changes.result == 'success'" in doc["jobs"]["java"]["if"]
 
 
 def test_release_publish_jobs_are_inline_and_oidc_only() -> None:
@@ -152,3 +154,17 @@ def test_top_level_permissions_are_empty_or_read_only() -> None:
         perms = doc.get("permissions")
         assert perms is not None, f"{path.name} must declare top-level permissions"
         assert all(v == "read" for v in perms.values()) or perms == {} or path.name == "opengrep.yml", path.name
+
+
+def test_java_matrix_runs_before_artifact_upload() -> None:
+    doc = yaml.safe_load((REPO / '.github/workflows/_java-plugin.yml').read_text())
+    steps = doc['jobs']['test']['steps']
+    test = next(s for s in steps if s.get('name') == 'Lint and test')
+    build = next(s for s in steps if s.get('name') == 'Build and verify tested distributions')
+    upload = next(s for s in steps if s.get('name') == 'Upload tested distributions')
+    assert 'spotlessCheck test' in test['run'] and 'spotlessApply' not in test['run']
+    assert '-PreleaseVersion=$RELEASE_VERSION' in test['run']
+    assert '-PspringBootVersion=$SPRING_BOOT_VERSION' in test['run']
+    assert build['if'] == upload['if'] == 'matrix.dist'
+    assert 'check_java_dist.py' in build['run'] and 'smoke_java.py' in build['run']
+    assert steps.index(test) < steps.index(build) < steps.index(upload)

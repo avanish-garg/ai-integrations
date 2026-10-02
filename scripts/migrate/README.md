@@ -94,3 +94,15 @@ git log --all --oneline --follow -- temporalio/contrib/<name>/__init__.py
 Add a `case` entry to `extract-sdk-python.sh` with every path found (filters first, renames
 second, README rename before directory rename). Missing a historical path cannot be fixed later
 without rewriting every imported SHA.
+
+## Java Spring AI extraction
+
+Run `scripts/migrate/extract-sdk-java.sh` with a default-branch-reachable `SRC_REF`.
+The frozen mapping covers `temporal-spring-ai/` and `contrib/temporal-spring-ai/`.
+At be01e60acc1e2ccfb20e783a9770bad745ed85c1 there are 12 rewritten commits
+(13 upstream path commits; the directory-only rename becomes empty), one author
+identity, 33 main Java files, one resource, and 14 test files. Source and tests
+are unchanged; the upstream README and build are archived under `_upstream/`.
+Merge the extracted branch with unrelated histories allowed, record the merge in
+IMPORTS.md, and label only the import PR `history-import`. The GitHub PR must use
+Create a merge commit. Gradle and MIT licensing adaptations are separate commits.

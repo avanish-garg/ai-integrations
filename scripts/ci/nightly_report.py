@@ -19,8 +19,8 @@ import sys
 
 # Job names come from ci.yml (`name: Python` and `name: Python (lowest-direct)`) joined with the
 # reusable workflow's job name; test_nightly_report.py asserts the two stay in step.
-JOB_RE = re.compile(r"^(?P<lane>Python(?: \(lowest-direct\))?) \((?P<plugin>[^)]+)\) / ")
-LANE_KEY = {"Python": "latest", "Python (lowest-direct)": "lowest-direct"}
+JOB_RE = re.compile(r"^(?P<lane>Python(?: \(lowest-direct\))?|Java) \((?P<plugin>[^)]+)\) / ")
+LANE_KEY = {"Python": "latest", "Python (lowest-direct)": "lowest-direct", "Java": "java-locked"}
 LABEL = "nightly"
 FAILED = {"failure", "timed_out"}
 
