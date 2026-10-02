@@ -8,8 +8,8 @@ description = 'Temporal Spring AI integration (Public Preview)'
 ext {
     javaRelease = 17
     temporalVersion = '1.40.0'
-    springAiVersion = '1.1.0'
-    springBootVersion = providers.gradleProperty('springBootVersion').getOrElse('3.5.12')
+    springAiVersion = '2.0.1'
+    springBootVersion = providers.gradleProperty('springBootVersion').getOrElse('4.0.8')
 }
 
 apply from: '../_shared/java.gradle'
@@ -29,11 +29,13 @@ dependencies {
 
     testImplementation "io.temporal:temporal-sdk:$temporalVersion"
     testImplementation "io.temporal:temporal-testing:$temporalVersion"
+    testImplementation "io.temporal:temporal-spring-boot-starter:$temporalVersion"
     testImplementation 'org.mockito:mockito-core:5.14.2'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.ai:spring-ai-rag'
     testImplementation 'org.springframework.ai:spring-ai-mcp'
     testImplementation 'org.springframework.ai:spring-ai-retry'
+    testImplementation 'org.springframework.ai:spring-ai-openai'
     testRuntimeOnly 'ch.qos.logback:logback-classic'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

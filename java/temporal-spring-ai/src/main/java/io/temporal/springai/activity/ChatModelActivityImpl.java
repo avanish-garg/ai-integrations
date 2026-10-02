@@ -1,8 +1,8 @@
 package io.temporal.springai.activity;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.temporal.springai.model.ChatModelTypes;
 import io.temporal.springai.model.ChatModelTypes.Message;
+import io.temporal.springai.util.ChatOptionsCodec;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
@@ -22,6 +22,8 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.MimeType;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Implementation of {@link ChatModelActivity} that delegates to a Spring AI {@link ChatModel}.
@@ -39,19 +41,9 @@ public class ChatModelActivityImpl implements ChatModelActivity {
   /**
    * Reads the caller's {@link ChatOptions} back out of the serialized JSON carried on {@link
    * ChatModelTypes.ModelOptions}. Plain Jackson — the workflow side wrote the blob with a matching
-   * plain {@link ObjectMapper}.
+   * Jackson 3 mapper.
    */
-  private static final ObjectMapper OPTIONS_MAPPER =
-      new ObjectMapper().addMixIn(ToolCallingChatOptions.class, ToolCallingChatOptionsMixin.class);
-
-  /**
-   * Mirror of the mixin in {@code ActivityChatModel} so deserialization ignores the same tool-bag
-   * properties the workflow side skipped.
-   */
-  @com.fasterxml.jackson.annotation.JsonIgnoreProperties(
-      value = {"toolCallbacks", "toolNames", "toolContext"},
-      ignoreUnknown = true)
-  private abstract static class ToolCallingChatOptionsMixin {}
+  private static final JsonMapper OPTIONS_MAPPER = ChatOptionsCodec.mapper();
 
   private final Map<String, ChatModel> chatModels;
   private final String defaultModelName;
@@ -107,11 +99,8 @@ public class ChatModelActivityImpl implements ChatModelActivity {
     // etc.) that aren't representable in the common ModelOptions record.
     ChatOptions rehydrated = tryRehydrateChatOptions(input.modelOptions());
     if (rehydrated instanceof ToolCallingChatOptions tcOpts) {
-      tcOpts.setInternalToolExecutionEnabled(false);
-      if (!toolCallbacks.isEmpty()) {
-        tcOpts.setToolCallbacks(toolCallbacks);
-      }
-      return Prompt.builder().messages(messages).chatOptions(tcOpts).build();
+      ChatOptions activityOptions = tcOpts.mutate().toolCallbacks(toolCallbacks).build();
+      return Prompt.builder().messages(messages).chatOptions(activityOptions).build();
     }
     if (rehydrated != null) {
       // Caller's ChatOptions isn't a ToolCallingChatOptions. Accept it as-is; tool callbacks
@@ -126,9 +115,7 @@ public class ChatModelActivityImpl implements ChatModelActivity {
 
     // Fallback path: no serialized blob, or rehydration failed. Build a ToolCallingChatOptions
     // from the common scalar fields.
-    ToolCallingChatOptions.Builder optionsBuilder =
-        ToolCallingChatOptions.builder()
-            .internalToolExecutionEnabled(false); // Let workflow handle tool execution
+    ToolCallingChatOptions.Builder<?> optionsBuilder = ToolCallingChatOptions.builder();
 
     if (input.modelOptions() != null) {
       ChatModelTypes.ModelOptions opts = input.modelOptions();
@@ -191,7 +178,7 @@ public class ChatModelActivityImpl implements ChatModelActivity {
               + " classpath.",
           className);
       return null;
-    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+    } catch (JacksonException e) {
       log.warn(
           "Could not deserialize ChatOptions of type {} on the activity side; falling back to"
               + " common fields. Cause: {}",
@@ -337,8 +324,7 @@ public class ChatModelActivityImpl implements ChatModelActivity {
   /**
    * Creates a stub ToolCallback that provides a tool definition but throws if called. This is used
    * because Spring AI's ChatModel API requires ToolCallbacks, but we only need to inform the model
-   * about available tools - actual execution happens in the workflow (since
-   * internalToolExecutionEnabled is false).
+   * about available tools. Actual execution happens in the workflow's ChatClient advisor.
    */
   private ToolCallback createStubToolCallback(String name, String description, String inputSchema) {
     ToolDefinition toolDefinition =
@@ -357,8 +343,7 @@ public class ChatModelActivityImpl implements ChatModelActivity {
       @Override
       public String call(String toolInput) {
         throw new UnsupportedOperationException(
-            "Tool execution should be handled by the workflow, not the activity. "
-                + "Ensure internalToolExecutionEnabled is set to false.");
+            "Tool execution must be handled by the workflow's ChatClient advisor.");
       }
     };
   }

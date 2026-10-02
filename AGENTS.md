@@ -94,6 +94,11 @@ Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree)
 - `./gradlew spotlessCheck test stageDist` checks without rewriting source. Updating
   dependency locks is intentional: `./gradlew resolveAndLockAll --write-locks`.
 
+The Spring AI history import is followed by an explicit ownership handoff: remove
+active upstream metadata before implementing Spring AI 2 here. Spring AI 1-to-2
+workflow-history replay compatibility is outside the upgrade's scope. The candidate
+version is `1.41.0-RC1`; workflow streams and OpenTelemetry never migrate here.
+
 ## CI
 
 One entry workflow, one reusable workflow per language, plugin as a parameter, no secrets.
