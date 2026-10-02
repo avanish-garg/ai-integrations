@@ -65,6 +65,10 @@ Committed development builds use `0.0.0`. CI supplies `-PreleaseVersion=<version
 from an immutable release tag before testing and building. No placeholder versions
 or snapshots are published.
 
+The shared [Java release runbook](../../AGENTS.md#releases) describes dry runs,
+protected tags, Central Portal staging, final publication gates, and recovery.
+The release workflow signs and publishes the distributions built by the test matrix.
+
 TRANSITION(sdk-cutover): final standalone publication remains disabled until
 sdk-java stops publishing this coordinate. The imported implementation and tests,
 as well as the migration adaptations, are relicensed under the repository's MIT

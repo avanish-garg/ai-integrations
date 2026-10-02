@@ -113,7 +113,7 @@ One entry workflow, one reusable workflow per language, plugin as a parameter, n
 
 Trusted publishing by ecosystem: PyPI uses OIDC trusted publishing (`pypa/gh-action-pypi-publish`, no stored token; PyPI cannot bind a reusable workflow, so publish jobs live inline in `release-python.yml`). npm supports OIDC trusted publishing (GitHub-hosted runners, npm >= 11.5.1, one publisher per package, register the calling workflow's filename; provenance is automatic for a public repo and package). Maven Central has no OIDC: Central Portal user token plus GPG signing, kept as environment-scoped secrets. Go has nothing to upload: an immutable tag plus `sum.golang.org` is the release.
 
-Version policy (`release_tool.py check-version-policy`; version ordering is evaluated against pypi.org and test.pypi.org): a coordinate with no published release must start at exactly `1.0.0` (`ga`) or `0.1.0` (otherwise), pre-releases of that version allowed; an existing coordinate must be strictly greater than its highest published version, yanked releases included. TestPyPI versions also move forward. A version already staged on TestPyPI, or already the newest release on pypi.org, only produces a warning (a re-run after an upload is the normal recovery path); an older staged version is rejected. Each smoke job proves the index serves exactly the artifacts this run built, none yanked (`verify-index-files`). Final versions additionally require `plugin.toml` `[release] allow-final = true` and no `TRANSITION(sdk-cutover)` marker in the plugin.
+Version policy (`release_tool.py check-version-policy`; version ordering is evaluated against pypi.org, test.pypi.org, or Maven Central's metadata): a coordinate with no published release must start at exactly `1.0.0` (`ga`) or `0.1.0` (otherwise), pre-releases of that version allowed; an existing coordinate must be strictly greater than its highest published version, yanked releases included. TestPyPI versions also move forward. A version already staged on TestPyPI, or already the newest public release, only produces a warning (a re-run after an upload is the normal recovery path); an older staged version is rejected. Each smoke job proves the registry serves the artifacts this run built byte for byte. Final versions additionally require `plugin.toml` `[release] allow-final = true` and no `TRANSITION(sdk-cutover)` marker in the plugin.
 
 Runbook for `python/<name>`:
 1. Merge every code, dependency and migration change intended for the release. Re-sync from upstream first while the transition rules apply. Do not change the committed `0.0.0` development version.
@@ -122,6 +122,64 @@ Runbook for `python/<name>`:
 4. `release-python.yml` validates the tag, injects its version, and runs the full test matrix (its ubuntu dist cell builds, checks and smoke-tests the wheel and sdist). It publishes those tested artifacts to TestPyPI (environment `testpypi`), proves TestPyPI serves exactly those files, smoke-installs from TestPyPI in a clean project, and for final versions publishes to PyPI (environment `pypi`, required reviewers confirm the tag SHA is on `main`) and repeats the proof and the smoke there. The clean-project smoke tolerates overlap during migrations only while `allow-final = false`.
 5. A draft GitHub Release is created idempotently with generated notes and the artifacts. Edit the notes and publish it by hand; a later re-run refuses to touch a release that is already published.
 6. If a job fails after an upload, use "Re-run failed jobs" on that run: `prepare`'s outputs and the tested artifact survive, the upload is skipped, and the smoke jobs verify the served files. A fresh dispatch on the tag also passes the version policy (the newest published version is treated as a re-run, with a warning) but rebuilds the artifacts, and `verify-index-files` fails if the rebuild is not byte-identical (a different uv version stamps its `Generator` into the wheel). If the artifacts themselves must change, fix forward with the next `rcN`; uploaded files are immutable and tags are never moved.
+
+Runbook for `java/<name>`:
+1. Merge the import (with a merge commit), the Spring AI 2 upgrade, and the release
+   pipeline, in that order. Keep the existing Maven coordinate and the committed
+   `0.0.0` development version. Workflow streams and OpenTelemetry stay in sdk-java.
+2. Configure shared environments `maven-central-staging` and `maven-central`, both
+   accepting tags `java/*/v*` only. Production requires an `@temporalio/ai-sdk`
+   reviewer and prevents self-review. Extend the immutable release-tag ruleset to
+   Java without relaxing its Python rules.
+   These environments and tag policies were configured on 2026-10-02; credential
+   installation remains a maintainer setup step.
+3. In staging, install environment secrets `CENTRAL_USERNAME`, `CENTRAL_PASSWORD`
+   (a Central Portal user-token pair), `GPG_PRIVATE_KEY` (armored private key or
+   sdk-java's base64-encoded secret keyring), and
+   `GPG_PASSPHRASE`; set environment variable `GPG_FINGERPRINT` to the full public
+   fingerprint. Production needs only the Central token pair, with access to the
+   staging deployment. Use credentials from the same publishing account in both.
+   The sdk-java equivalents are `RH_USER`, `RH_PASSWORD`, `JAR_SIGNING_KEY`,
+   `JAR_SIGNING_KEY_PASSWORD`, and `JAR_SIGNING_KEY_ID` (derive the full fingerprint
+   if it contains only a short ID). GitHub cannot export existing secret values;
+   an authorized maintainer must install them from the credential source. Publish
+   the public key to a supported keyserver before Central validation; see
+   [Sonatype's GPG requirements](https://central.sonatype.org/publish/requirements/gpg/).
+4. Dry-run the candidate on main:
+   `gh workflow run release-java.yml --ref main -f tag=java/temporal-spring-ai/v1.41.0-RC1`.
+   The full compatibility matrix tests the injected version; its primary
+   Ubuntu/max cell builds and verifies the five Maven artifacts and installs a
+   clean consumer. A branch dispatch never signs, uploads, or creates a release.
+5. Tag the tested main commit with an annotated, immutable tag
+   `java/temporal-spring-ai/v1.41.0-RC1` and push it. The shared workflow signs the
+   tested bytes, adds checksums, uploads a `USER_MANAGED` bundle to Central Portal,
+   waits for `VALIDATED`, compares all staged files byte for byte, and installs
+   a clean consumer from the authenticated staging endpoint. Candidates remain
+   privately staged; they are not public Maven Central releases. A draft GitHub
+   release contains generated notes, the tested files, signed bundle, and deployment
+   metadata. Review and publish the GitHub draft separately.
+6. Final publication additionally requires stopping sdk-java publication of this
+   artifact, removing all plugin cutover markers, and setting `allow-final = true`.
+   The production environment approval publishes the already verified deployment;
+   the workflow waits for `PUBLISHED`, proves Maven Central serves the same files,
+   and installs a clean consumer before drafting a final GitHub release. Do not
+   remove these gates merely to run the candidate.
+7. After an upload failure, use **Re-run failed jobs**. The workflow preserves the
+   signed bundle, upload intent, and deployment ID even if validation or the consumer
+   fails. It reuses those signatures and never retries an ambiguous upload POST.
+   For a fresh dispatch on the same tag, supply `-f deployment-id=<Portal UUID>`;
+   recovery downloads the existing signed files and rejects any rebuilt-byte
+   mismatch or deployment containing additional coordinates. If an upload response
+   was lost, inspect Portal for its ID before retrying. Never move a tag or replace
+   uploaded files: a changed candidate gets the next `RCN`. Portal does not expose
+   TestPyPI-style staging version enumeration; public ordering is checked against
+   Maven Central and an existing validated staged version requires explicit recovery.
+
+The Java pipeline uses the
+[Central Portal Publisher API](https://central.sonatype.org/publish/publish-portal-api/)
+directly. Maven Central remains the public host, preserving existing consumer
+coordinates. The retired OSSRH service and its compatibility API are unnecessary
+for this new pipeline. Snapshot publishing is not configured.
 
 ## Migration and re-sync
 

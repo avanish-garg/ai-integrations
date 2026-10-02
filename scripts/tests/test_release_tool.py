@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,12 +21,17 @@ def test_parse_tag_valid() -> None:
     }
     assert release_tool.parse_tag("go/googleadk/v0.3.0")["prerelease"] == "false"
     assert release_tool.parse_tag("typescript/vercel-ai-sdk/v1.0.0.dev1")["prerelease"] == "true"
+    java = release_tool.parse_tag("java/temporal-spring-ai/v1.41.0-RC1")
+    assert java["version"] == "1.41.0-RC1" and java["prerelease"] == "true"
+    assert release_tool.parse_tag("java/temporal-spring-ai/v1.41.0")["prerelease"] == "false"
 
 
 @pytest.mark.parametrize("tag", [
     "v1.0.0", "python/v1.0.0", "rust/foo/v1.0.0", "python/Foo/v1.0.0", "python/foo/1.0.0",
     "python/foo/v1.0.0-rc1", "python/foo/v1.0.0RC1", "python/foo/v01.0.0", "python/foo/v1.0.0+local", "python/foo/vabc",
     "python/../v1.0.0", "python/.hidden/v1.0.0", "python/foo/v1.0.0\n", "python/foo/v1.0.0\nfoo=bar",
+    "java/foo/v1.41.0rc1", "java/foo/v1.41.0-RC0", "java/foo/v01.41.0-RC1", "java/foo/v1.41.0-SNAPSHOT",
+    "java/foo/v1.41.0-RC01", "java/foo/v1.41", "java/foo/v1.41.0+local",
 ])
 def test_parse_tag_invalid(tag: str) -> None:
     with pytest.raises(release_tool.PolicyError):
@@ -341,3 +347,69 @@ def test_release_notes_ignores_other_plugins_tags(plugin_repo: Path) -> None:
     assert release_tool.previous_tag(repo, "fakeplug" and "python", "fakeplug", Version("0.1.0")) is None
     notes = release_tool.release_notes(repo, "python/fakeplug", "python/fakeplug/v0.1.0", "temporalio/ai-integrations")
     assert "First standalone release" in notes
+
+
+def _java_plugin(repo: Path, *, allow_final: bool = False) -> Path:
+    directory = repo / "java/temporal-spring-ai"
+    directory.mkdir(parents=True)
+    (directory / "plugin.toml").write_text(f'''[plugin]
+name = "temporal-spring-ai"
+language = "java"
+coordinate = "io.temporal:temporal-spring-ai"
+registry = "maven"
+maturity = "preview"
+root-api = "io.temporal.springai"
+[release]
+allow-final = {str(allow_final).lower()}
+''')
+    return directory
+
+
+def test_maven_policy_continues_existing_versions_and_blocks_final_cutover(repo: Path, tmp_path: Path, capsys) -> None:
+    directory = _java_plugin(repo)
+    commit_all(repo, "Java plugin")
+    metadata = tmp_path / "metadata.xml"
+    metadata.write_text("<metadata><versioning><versions><version>1.39.0</version><version>1.40.0</version></versions></versioning></metadata>")
+    args = ["--repo-root", str(repo), "check-version-policy", "--plugin-dir", str(directory), "--registry-json", str(metadata)]
+    assert release_tool.main([*args, "--version", "1.41.0-RC1"]) == 0
+    assert release_tool.main([*args, "--version", "1.39.1"]) == 1
+    assert "not greater" in capsys.readouterr().out
+    assert release_tool.main([*args, "--version", "1.41.0"]) == 1
+    assert "allow-final is false" in capsys.readouterr().out
+    (directory / "plugin.toml").write_text((directory / "plugin.toml").read_text().replace("false", "true"))
+    (directory / "README.md").write_text("TRANSITION(sdk-cutover): SDK still publishes this artifact\n")
+    commit_all(repo, "cutover pending")
+    assert release_tool.main([*args, "--version", "1.41.0"]) == 1
+    assert "TRANSITION(sdk-cutover)" in capsys.readouterr().out
+    (directory / "README.md").write_text("SDK publishing stopped\n")
+    commit_all(repo, "cutover complete")
+    assert release_tool.main([*args, "--version", "1.41.0"]) == 0
+
+
+def test_maven_metadata_fails_closed_and_treats_only_404_as_absent(tmp_path: Path, monkeypatch) -> None:
+    metadata = tmp_path / "metadata.xml"
+    assert release_tool.fetch_maven_versions("io.temporal:temporal-spring-ai", metadata) == []
+    for invalid in ("<broken", "<metadata/>", "<metadata><versioning><versions><version>unknown</version></versions></versioning></metadata>"):
+        metadata.write_text(invalid)
+        with pytest.raises(release_tool.PolicyError):
+            release_tool.fetch_maven_versions("io.temporal:temporal-spring-ai", metadata)
+    def error404(*args, **kwargs):
+        raise urllib.error.HTTPError("url", 404, "absent", {}, None)
+    monkeypatch.setattr(release_tool.urllib.request, "urlopen", error404)
+    assert release_tool.fetch_maven_versions("io.temporal:temporal-spring-ai") == []
+    def error503(*args, **kwargs):
+        raise urllib.error.HTTPError("url", 503, "unavailable", {}, None)
+    monkeypatch.setattr(release_tool.urllib.request, "urlopen", error503)
+    with pytest.raises(release_tool.PolicyError, match="503"):
+        release_tool.fetch_maven_versions("io.temporal:temporal-spring-ai")
+
+
+def test_java_candidate_notes_describe_private_staging(repo: Path) -> None:
+    _java_plugin(repo)
+    commit_all(repo, "Upgrade Spring AI 2 (#38)")
+    tag = "java/temporal-spring-ai/v1.41.0-RC1"
+    git(repo, "tag", tag)
+    notes = release_tool.release_notes(repo, "java/temporal-spring-ai", tag, "temporalio/ai-integrations")
+    assert "privately staged" in notes and "Maven Central Portal" in notes
+    assert "Final publication remains blocked" in notes
+    assert "TestPyPI" not in notes and "whichever installs last" not in notes
