@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
@@ -18,8 +19,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.anthropic.AnthropicCacheOptions;
+import org.springframework.ai.anthropic.AnthropicCacheStrategy;
+import org.springframework.ai.anthropic.AnthropicCacheTtl;
+import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -97,6 +103,45 @@ class ProviderOptionsPassthroughTest {
   }
 
   @Test
+  void defaultAnthropicOptions_surviveActivityRoundTrip() {
+    runAnthropicWorkflow(DefaultAnthropicOptionsWorkflowImpl.class);
+    AnthropicChatOptions received =
+        assertInstanceOf(AnthropicChatOptions.class, model.capturedOptions.get());
+    assertEquals("claude-test", received.getModel());
+    assertEquals(2048, received.getMaxTokens());
+    assertNull(received.getThinking());
+    assertEquals(AnthropicCacheStrategy.NONE, received.getCacheOptions().getStrategy());
+  }
+
+  @Test
+  void anthropicThinkingAndCacheOptions_surviveChatClientRoundTrip() {
+    runAnthropicWorkflow(AnthropicOptionsWorkflowImpl.class);
+    AnthropicChatOptions received =
+        assertInstanceOf(AnthropicChatOptions.class, model.capturedOptions.get());
+    assertEquals(
+        AnthropicChatOptions.builder().thinkingEnabled(1024).build().getThinking(),
+        received.getThinking());
+    assertEquals(AnthropicCacheStrategy.SYSTEM_ONLY, received.getCacheOptions().getStrategy());
+    assertEquals(
+        AnthropicCacheTtl.ONE_HOUR,
+        received.getCacheOptions().getMessageTypeTtl().get(MessageType.SYSTEM));
+    assertEquals(
+        32, received.getCacheOptions().getMessageTypeMinContentLengths().get(MessageType.SYSTEM));
+    assertTrue(received.getCacheOptions().isMultiBlockSystemCaching());
+  }
+
+  private void runAnthropicWorkflow(Class<? extends ChatWorkflow> implementation) {
+    Worker worker = testEnv.newWorker(TASK_QUEUE);
+    worker.registerWorkflowImplementationTypes(implementation);
+    worker.registerActivitiesImplementations(new ChatModelActivityImpl(model));
+    testEnv.start();
+    ChatWorkflow workflow =
+        client.newWorkflowStub(
+            ChatWorkflow.class, WorkflowOptions.newBuilder().setTaskQueue(TASK_QUEUE).build());
+    assertEquals("pong", workflow.chat("ping"));
+  }
+
+  @Test
   void nullChatOptions_usesCommonFieldFallback() {
     // Sanity: a workflow that doesn't set any prompt-level options still works. The activity
     // gets the plugin's default ToolCallingChatOptions and the capturing model confirms it.
@@ -163,6 +208,45 @@ class ProviderOptionsPassthroughTest {
           chatModel.call(
               new Prompt(List.of(new org.springframework.ai.chat.messages.UserMessage(message))));
       return response.getResult().getOutput().getText();
+    }
+  }
+
+  public static class DefaultAnthropicOptionsWorkflowImpl implements ChatWorkflow {
+    @Override
+    public String chat(String message) {
+      AnthropicChatOptions options =
+          AnthropicChatOptions.builder().model("claude-test").maxTokens(2048).build();
+      return ActivityChatModel.forDefault()
+          .call(new Prompt(message, options))
+          .getResult()
+          .getOutput()
+          .getText();
+    }
+  }
+
+  public static class AnthropicOptionsWorkflowImpl implements ChatWorkflow {
+    @Override
+    public String chat(String message) {
+      AnthropicChatOptions options =
+          AnthropicChatOptions.builder()
+              .model("claude-test")
+              .maxTokens(2048)
+              .thinkingEnabled(1024)
+              .cacheOptions(
+                  AnthropicCacheOptions.builder()
+                      .strategy(AnthropicCacheStrategy.SYSTEM_ONLY)
+                      .messageTypeTtl(MessageType.SYSTEM, AnthropicCacheTtl.ONE_HOUR)
+                      .messageTypeMinContentLength(MessageType.SYSTEM, 32)
+                      .multiBlockSystemCaching(true)
+                      .build())
+              .build();
+      return ChatClient.builder(ActivityChatModel.forDefault())
+          .defaultOptions(options.mutate())
+          .build()
+          .prompt()
+          .user(message)
+          .call()
+          .content();
     }
   }
 
