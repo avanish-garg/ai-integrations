@@ -28,21 +28,21 @@ resources (`python/_shared/`, `python/_template/`) and are ignored by CI discove
 
 | Folder | Coordinate | First version here | Maturity | Root API |
 |---|---|---|---|---|
-| `python/mcp` | `temporalio-mcp` | 0.1.0 | experimental | `temporalio.mcp` |
-| `python/deepagents` | `temporalio-deepagents` | 0.1.0 | experimental | `temporalio.deepagents` |
-| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | experimental | `temporalio.google_adk` |
-| `python/google_genai` | `temporalio-google-genai` | 0.1.0 | preview | `temporalio.google_genai` |
-| `python/langgraph` | `temporalio-langgraph` | 0.1.0 | preview | `temporalio.langgraph` |
-| `python/langsmith` | `temporalio-langsmith` | 0.1.0 | preview | `temporalio.langsmith` |
-| `python/openai_agents` | `temporalio-openai-agents` | 1.0.0 | ga | `temporalio.openai_agents` |
-| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | preview | `temporalio.strands_agents` |
-| `typescript/vercel-ai-sdk` | `@temporalio/vercel-ai-sdk` | 1.0.0 | ga | `@temporalio/vercel-ai-sdk` |
-| `typescript/google-adk` | `@temporalio/google-adk` | 0.1.0 | preview | `@temporalio/google-adk` |
-| `typescript/langsmith` | `@temporalio/langsmith` | continues (1.24.0 next) | experimental | `@temporalio/langsmith` |
-| `typescript/openai-agents` | `@temporalio/openai-agents` | continues (1.24.0 next) | ga | `@temporalio/openai-agents` |
-| `typescript/strands-agents` | `@temporalio/strands-agents` | continues (1.24.0 next) | experimental | `@temporalio/strands-agents` |
-| `java/temporal-spring-ai` | `io.temporal:temporal-spring-ai` | continues (1.39.0 next) | preview | `io.temporal.springai` |
-| `go/googleadk` | `go.temporal.io/sdk/contrib/googleadk` | continues (v0.3.0 next) | preview | `googleadk` |
+| `python/mcp` | `temporalio-mcp` | 0.1.0 | Pre-release | `temporalio.mcp` |
+| `python/deepagents` | `temporalio-deepagents` | 0.1.0 | Pre-release | `temporalio.deepagents` |
+| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | Pre-release | `temporalio.google_adk` |
+| `python/google_genai` | `temporalio-google-genai` | 0.1.0 | Public Preview | `temporalio.google_genai` |
+| `python/langgraph` | `temporalio-langgraph` | 0.1.0 | Public Preview | `temporalio.langgraph` |
+| `python/langsmith` | `temporalio-langsmith` | 0.1.0 | Public Preview | `temporalio.langsmith` |
+| `python/openai_agents` | `temporalio-openai-agents` | 1.0.0 | Generally Available | `temporalio.openai_agents` |
+| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | Public Preview | `temporalio.strands_agents` |
+| `typescript/vercel-ai-sdk` | `@temporalio/vercel-ai-sdk` | 1.0.0 | Generally Available | `@temporalio/vercel-ai-sdk` |
+| `typescript/google-adk` | `@temporalio/google-adk` | 0.1.0 | Public Preview | `@temporalio/google-adk` |
+| `typescript/langsmith` | `@temporalio/langsmith` | continues (1.24.0 next) | Public Preview | `@temporalio/langsmith` |
+| `typescript/openai-agents` | `@temporalio/openai-agents` | continues (1.24.0 next) | Generally Available | `@temporalio/openai-agents` |
+| `typescript/strands-agents` | `@temporalio/strands-agents` | continues (1.24.0 next) | Pre-release | `@temporalio/strands-agents` |
+| `java/temporal-spring-ai` | `io.temporal:temporal-spring-ai` | continues (1.39.0 next) | Public Preview | `io.temporal.springai` |
+| `go/googleadk` | `go.temporal.io/sdk/contrib/googleadk` | continues (v0.3.0 next) | Public Preview | `googleadk` |
 
 "First version here" values are informational; the registry is the source of truth for the
 version policy (below). The Go row has an unresolved problem: a module served by the static vanity
@@ -57,9 +57,10 @@ while `[release] allow-final = false`.
 
 Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree): `ga` =
 `Development Status :: 5 - Production/Stable`; `preview` = `4 - Beta`; `experimental` = `3 - Alpha`.
-Use each plugin's public Temporal documentation for its release stage. In READMEs, use
-the three release-stage labels: Pre-release maps to `experimental`, Public Preview to
-`preview`, and Generally Available to `ga`. Experimental is an internal maturity value,
+Use each plugin's public Temporal documentation for its release stage. In READMEs and
+this table's Maturity column, use the three release-stage labels: Pre-release maps to
+`experimental`, Public Preview to `preview`, and Generally Available to `ga`.
+Experimental is an internal maturity value,
 not a release-stage label. Feature-specific stages do not change a plugin's
 overall maturity (for example, OpenAI Agents is Generally Available with preview or experimental features).
 
