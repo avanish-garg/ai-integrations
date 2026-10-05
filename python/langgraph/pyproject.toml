@@ -35,8 +35,8 @@ requires = ["uv_build>=0.12.5,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-# src/temporalio and src/temporalio/contrib must NOT contain __init__.py: the SDK wheel owns them.
-module-name = "temporalio.contrib.langgraph"
+# src/temporalio must NOT contain __init__.py: the SDK wheel owns that package.
+module-name = "temporalio.langgraph"
 
 [dependency-groups]
 dev = [

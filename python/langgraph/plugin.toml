@@ -5,16 +5,15 @@ name = "langgraph"
 language = "python"
 coordinate = "temporalio-langgraph"
 registry = "pypi"
-root-api = "temporalio.contrib.langgraph"
+root-api = "temporalio.langgraph"
 maturity = "experimental"
 docs = "https://docs.temporal.io/develop/python/integrations/langgraph"
-upstream = "temporalio/sdk-python:temporalio/contrib/langgraph"
 
 [release]
-allow-final = false
+allow-final = true
 
 [ci]
 runtime-versions = ["3.10", "3.14"]
 
 [smoke]
-imports = ["temporalio.contrib.langgraph._workflow", "temporalio.contrib.langgraph._plugin"]
+imports = ["temporalio.langgraph._workflow", "temporalio.langgraph._plugin"]

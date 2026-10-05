@@ -4,7 +4,7 @@ version = "0.0.0"  # Development placeholder; protected release tags inject the 
 description = "Temporal integration for strands agents"
 authors = [{ name = "Temporal Technologies Inc", email = "sdk@temporal.io" }]
 requires-python = ">=3.10"
-readme = "README.pypi.md"
+readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]   # committed copy of the repository's root LICENSE
 classifiers = [
@@ -35,8 +35,8 @@ requires = ["uv_build>=0.12.5,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-# src/temporalio and src/temporalio/contrib must NOT contain __init__.py: the SDK wheel owns them.
-module-name = "temporalio.contrib.strands"
+# src/temporalio must NOT contain __init__.py: the SDK wheel owns that package.
+module-name = "temporalio.strands_agents"
 
 [dependency-groups]
 dev = [
@@ -62,7 +62,7 @@ required-version = ">=0.12.5,<0.13"              # same value in scripts/pyproje
 exclude-newer = "2 weeks"                        # org supply-chain cooldown for third-party packages
 exclude-newer-package = { temporalio = false }   # the SDK is exempt: cutover releases must be adoptable on day one
 link-mode = "copy"
-cache-keys = [{ file = "pyproject.toml" }, { file = "README.md" }, { file = "README.pypi.md" }, { file = "src/**/*" }]
+cache-keys = [{ file = "pyproject.toml" }, { file = "README.md" }, { file = "src/**/*" }]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -7,7 +7,7 @@ This Temporal [Plugin](https://docs.temporal.io/develop/plugins-guide) allows yo
 ## Installation
 
 ```sh
-uv add temporalio[strands-agents]
+uv add temporalio-strands-agents
 ```
 
 ## Quickstart
@@ -20,7 +20,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib.strands import StrandsPlugin, TemporalAgent
+from temporalio.strands_agents import StrandsPlugin, TemporalAgent
 from temporalio.worker import Worker
 
 
@@ -133,7 +133,7 @@ Passing `retry_strategy=...` to `TemporalAgent(...)` raises `ValueError`; remove
 
 ## Structured Output
 
-Like Strands `Agent`, `TemporalAgent` supports structured output with `structured_output_model`. The plugin defaults to [`pydantic_data_converter`](../pydantic), so Pydantic types easily serialize across the activity and workflow boundary.
+Like Strands `Agent`, `TemporalAgent` supports structured output with `structured_output_model`. The plugin defaults to [`pydantic_data_converter`](https://github.com/temporalio/sdk-python/tree/6adc0d84290a79952dee3ef02c36f6ed9334874a/temporalio/contrib/pydantic), so Pydantic types easily serialize across the activity and workflow boundary.
 
 ```python
 from pydantic import BaseModel
@@ -183,7 +183,7 @@ worker-side sandbox under a name, then select that name in workflow code:
 
 ```python
 from strands.sandbox.docker import DockerSandbox
-from temporalio.contrib.strands import (
+from temporalio.strands_agents import (
     SandboxWorkflowContext,
     StrandsPlugin,
     TemporalAgent,
@@ -309,7 +309,7 @@ workflow. The activity publishes each `StreamChunk` as it arrives; the final
 ```python
 from datetime import timedelta
 
-from temporalio.contrib.strands import SandboxStreamEvent, TemporalSandbox
+from temporalio.strands_agents import SandboxStreamEvent, TemporalSandbox
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
 
 # workflow __init__
@@ -351,7 +351,7 @@ name of a worker environment variable, then allow that name on every worker that
 runs the sandbox activities:
 
 ```python
-from temporalio.contrib.strands import temporal_worker_env_ref
+from temporalio.strands_agents import temporal_worker_env_ref
 
 # workflow
 await sandbox.execute(
@@ -378,7 +378,7 @@ Decorate non-deterministic tools with `@activity.defn`, or if you're importing t
 
 ```python
 from strands_tools import shell
-from temporalio.contrib.strands import workflow as strands_workflow
+from temporalio.strands_agents import workflow as strands_workflow
 
 @activity.defn
 async def fetch_user(user_id: str) -> dict:
@@ -432,7 +432,7 @@ agent = TemporalAgent(start_to_close_timeout=..., hooks=[AuditHook()])
 Callbacks run in workflow context, so they must be deterministic: no `time.time()`, `uuid.uuid4()`, or I/O — same rules as workflow code. For callbacks that need I/O (audit logging, metrics, alerting), use `workflow.activity_as_hook()` to dispatch the work as a Temporal activity:
 
 ```python
-from temporalio.contrib.strands.workflow import activity_as_hook
+from temporalio.strands_agents.workflow import activity_as_hook
 
 @activity.defn
 async def persist_tool_call(tool_name: str) -> None:
@@ -517,7 +517,7 @@ The same works from an `activity_as_tool`-wrapped activity. The plugin's failure
 
 ```python
 from strands.interrupt import Interrupt, InterruptException
-from temporalio.contrib.strands.workflow import activity_as_tool
+from temporalio.strands_agents.workflow import activity_as_tool
 
 @activity.defn
 async def delete_thing(name: str) -> str:
@@ -592,7 +592,7 @@ class ChatWorkflow:
 ```python
 from mcp import StdioServerParameters, stdio_client
 from strands.tools.mcp.mcp_client import MCPClient
-from temporalio.contrib.strands import TemporalMCPClient
+from temporalio.strands_agents import TemporalMCPClient
 
 # workflow
 @workflow.defn
@@ -638,7 +638,7 @@ StrandsPlugin(
 
 ## Observability
 
-`StrandsPlugin` composes cleanly with [`OpenTelemetryPlugin`](../opentelemetry). Register `OpenTelemetryPlugin` on the client (workers built from that client pick it up automatically) and `StrandsPlugin` on the worker. You'll get OTel spans around the model, tool, and MCP activities the plugin schedules, plus any spans Strands itself emits inside `invoke_async`:
+`StrandsPlugin` composes cleanly with [`OpenTelemetryPlugin`](https://github.com/temporalio/sdk-python/tree/6adc0d84290a79952dee3ef02c36f6ed9334874a/temporalio/contrib/opentelemetry). Register `OpenTelemetryPlugin` on the client (workers built from that client pick it up automatically) and `StrandsPlugin` on the worker. You'll get OTel spans around the model, tool, and MCP activities the plugin schedules, plus any spans Strands itself emits inside `invoke_async`:
 
 ```python
 import opentelemetry.trace
@@ -656,4 +656,4 @@ Worker(
 )
 ```
 
-Set the tracer provider before connecting the client. See the [OpenTelemetry plugin README](../opentelemetry) for exporter setup.
+Set the tracer provider before connecting the client. See the [OpenTelemetry plugin README](https://github.com/temporalio/sdk-python/tree/6adc0d84290a79952dee3ef02c36f6ed9334874a/temporalio/contrib/opentelemetry) for exporter setup.

@@ -5,16 +5,15 @@ name = "google_genai"
 language = "python"
 coordinate = "temporalio-google-genai"
 registry = "pypi"
-root-api = "temporalio.contrib.google_genai"
+root-api = "temporalio.google_genai"
 maturity = "experimental"
 docs = "https://docs.temporal.io/develop/python/integrations/google-genai"
-upstream = "temporalio/sdk-python:temporalio/contrib/google_genai"
 
 [release]
-allow-final = false
+allow-final = true
 
 [ci]
 runtime-versions = ["3.10", "3.14"]
 
 [smoke]
-imports = ["temporalio.contrib.google_genai.workflow"]
+imports = ["temporalio.google_genai.workflow"]

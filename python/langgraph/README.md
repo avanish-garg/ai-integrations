@@ -7,7 +7,7 @@ This Temporal [Plugin](https://docs.temporal.io/develop/plugins-guide) allows yo
 ## Installation
 
 ```sh
-uv add temporalio[langgraph]
+uv add temporalio-langgraph
 ```
 
 ## Plugin Initialization
@@ -16,7 +16,7 @@ uv add temporalio[langgraph]
 
 ```python
 from langgraph.graph import StateGraph
-from temporalio.contrib.langgraph import LangGraphPlugin
+from temporalio.langgraph import LangGraphPlugin
 
 g = StateGraph(State)
 g.add_node("my_node", my_node, metadata={"execute_in": "activity"})
@@ -27,7 +27,7 @@ plugin = LangGraphPlugin(graphs={"my-graph": g})
 ### Functional API
 
 ```python
-from temporalio.contrib.langgraph import LangGraphPlugin
+from temporalio.langgraph import LangGraphPlugin
 
 plugin = LangGraphPlugin(
     entrypoints={"my_entrypoint": my_entrypoint},
@@ -45,7 +45,7 @@ Temporal handles durability, so third-party checkpointers (like PostgreSQL or Re
 import langgraph.checkpoint.memory
 import typing
 
-from temporalio.contrib.langgraph import graph
+from temporalio.langgraph import graph
 from temporalio import workflow
 
 @workflow.defn
@@ -105,7 +105,7 @@ Pass Activity options to the `LangGraphPlugin` constructor, keyed by task functi
 ```python
 from datetime import timedelta
 from temporalio.common import RetryPolicy
-from temporalio.contrib.langgraph import LangGraphPlugin
+from temporalio.langgraph import LangGraphPlugin
 
 plugin = LangGraphPlugin(
     entrypoints={"my_entrypoint": my_entrypoint},
@@ -128,7 +128,7 @@ LangGraph's run-scoped context (`context_schema`) is reconstructed on the Activi
 from langgraph.runtime import Runtime
 from typing_extensions import TypedDict
 
-from temporalio.contrib.langgraph import graph
+from temporalio.langgraph import graph
 
 class Context(TypedDict):
     user_id: str
@@ -199,7 +199,7 @@ from typing_extensions import TypedDict
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib.langgraph import LangGraphPlugin, graph
+from temporalio.langgraph import LangGraphPlugin, graph
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
 from temporalio.worker import Worker
 
@@ -286,7 +286,7 @@ Streaming has **at-least-once** delivery per activity attempt. When an activity-
 
 ## Tracing
 
-We recommend the [Temporal LangSmith Plugin](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/langsmith) to trace your LangGraph Workflows and Activities.
+We recommend the [Temporal LangSmith Plugin](https://github.com/temporalio/ai-integrations/tree/main/python/langsmith) to trace your LangGraph Workflows and Activities.
 
 ## Stores are not supported
 
@@ -299,13 +299,13 @@ Use Workflow state for per-run memory, or an external database (Postgres/Redis/e
 Install dependencies:
 
 ```sh
-uv sync --all-extras
+make sync
 ```
 
 Run the test suite:
 
 ```sh
-uv run pytest tests/contrib/langgraph
+make test
 ```
 
 Tests start a local Temporal dev server automatically — no external server needed.

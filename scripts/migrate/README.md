@@ -101,9 +101,13 @@ Five initial imports are pinned to sdk-python `main` at
 `6adc0d84290a79952dee3ef02c36f6ed9334874a`. Google ADK is pinned to
 `d61b3f3ad3dcfd9187fa6012b5d77de2d5b4cb9f`, the parent of #1854. That merged PR
 requires the named `workflow.new_random(name)` API, absent from the latest published SDK
-(1.34.0); re-sync Google ADK after an SDK release contains it. Both SHAs are reachable from
-upstream `main`. Their source and plugin-specific tests are
-unchanged. Path archaeology found no earlier locations outside their current package and test
+(1.34.0); port that fix after an SDK release contains it. Both SHAs are reachable from
+upstream `main`. The history-import merges preserve source and plugin-specific tests
+unchanged. A separate local cutover commit moves all six to `temporalio.<folder_name>`,
+including `temporalio.google_adk` and `temporalio.strands_agents`, updates imports and
+examples, and flattens the test trees. This API cutover was explicitly requested with
+the initial import. Active `upstream` metadata is removed because this repository now
+owns the code. Path archaeology found no earlier locations outside their current package and test
 trees. Expected filtered history counts are:
 
 | Folder | Upstream module | Commits | Identities |
@@ -129,13 +133,12 @@ Each plugin has its own canonical provenance support and local server fixtures. 
 helpers are copied only where used: `new_worker` for Google GenAI and LangSmith, Nexus/trace
 helpers for LangSmith, and the span formatter and provider-reset fixtures for Google ADK.
 DeepAgents sets the low history-count threshold required by its server-suggested continue-as-new
-test. Its README fixture points the unchanged upstream README tests at the standalone
-distribution README. Imported provider tests use local models, mock transports or in-process MCP servers.
-Final releases remain disabled while `plugin.toml` still names the SDK upstream.
+test. Its README tests point at the standalone distribution README. Provider tests use
+local models, mock transports or in-process MCP servers. Final releases are enabled
+after the API cutover; the committed development version remains `0.0.0`.
 
-Google GenAI and Strands select separate `README.pypi.md` files for package metadata.
-These copies resolve upstream-relative links to the pinned SDK tree, while the imported
-READMEs remain unchanged. The conventions check validates the README actually published.
+Google GenAI and Strands README links resolve SDK-owned dependencies to the pinned SDK
+tree. The conventions check validates the README actually published.
 
 The shared make targets keep a lowest-direct lock through lint and tests instead of
 allowing `uv run` to replace it. Minimum-dependency validation sets the LangGraph floor

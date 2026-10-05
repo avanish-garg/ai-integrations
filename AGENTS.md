@@ -29,13 +29,13 @@ resources (`python/_shared/`, `python/_template/`) and are ignored by CI discove
 | Folder | Coordinate | First version here | Maturity | Root API |
 |---|---|---|---|---|
 | `python/mcp` | `temporalio-mcp` | 0.1.0 | experimental | `temporalio.mcp` |
-| `python/deepagents` | `temporalio-deepagents` | 0.1.0 | experimental | `temporalio.contrib.deepagents` |
-| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | preview | `temporalio.contrib.google_adk_agents` |
-| `python/google_genai` | `temporalio-google-genai` | 0.1.0 | experimental | `temporalio.contrib.google_genai` |
-| `python/langgraph` | `temporalio-langgraph` | 0.1.0 | experimental | `temporalio.contrib.langgraph` |
-| `python/langsmith` | `temporalio-langsmith` | 0.1.0 | experimental | `temporalio.contrib.langsmith` |
+| `python/deepagents` | `temporalio-deepagents` | 0.1.0 | experimental | `temporalio.deepagents` |
+| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | preview | `temporalio.google_adk` |
+| `python/google_genai` | `temporalio-google-genai` | 0.1.0 | experimental | `temporalio.google_genai` |
+| `python/langgraph` | `temporalio-langgraph` | 0.1.0 | experimental | `temporalio.langgraph` |
+| `python/langsmith` | `temporalio-langsmith` | 0.1.0 | experimental | `temporalio.langsmith` |
 | `python/openai_agents` | `temporalio-openai-agents` | 1.0.0 | ga | `temporalio.openai_agents` |
-| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | experimental | `temporalio.contrib.strands` |
+| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | experimental | `temporalio.strands_agents` |
 | `typescript/vercel-ai-sdk` | `@temporalio/vercel-ai-sdk` | 1.0.0 | ga | `@temporalio/vercel-ai-sdk` |
 | `typescript/google-adk` | `@temporalio/google-adk` | 0.1.0 | preview | `@temporalio/google-adk` |
 | `typescript/langsmith` | `@temporalio/langsmith` | continues (1.24.0 next) | experimental | `@temporalio/langsmith` |
@@ -54,10 +54,6 @@ Naming derivation, enforced by `scripts/ci/check_conventions.py`: folder name = 
 `temporalio.<name>`; release tag = `<language>/<name>/v<version>`. Folders never end in `-plugin`
 or `_plugin`. An upstream-backed migration may temporarily retain `temporalio.contrib.<name>` only
 while `[release] allow-final = false`.
-The initial `google_adk` and `strands_agents` imports retain their actual upstream APIs,
-`temporalio.contrib.google_adk_agents` and `temporalio.contrib.strands`, under the same rule
-and only with matching sdk-python upstream paths. Their final roots remain
-`temporalio.google_adk` and `temporalio.strands_agents`.
 
 Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree): `ga` =
 `Development Status :: 5 - Production/Stable`; `preview` = `4 - Beta`; `experimental` = `3 - Alpha`.

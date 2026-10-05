@@ -6,16 +6,15 @@ name = "google_adk"
 language = "python"
 coordinate = "temporalio-google-adk"
 registry = "pypi"
-root-api = "temporalio.contrib.google_adk_agents"
+root-api = "temporalio.google_adk"
 maturity = "preview"
 docs = "https://docs.temporal.io/develop/python/integrations/google-adk"
-upstream = "temporalio/sdk-python:temporalio/contrib/google_adk_agents"
 
 [release]
-allow-final = false
+allow-final = true
 
 [ci]
 runtime-versions = ["3.10", "3.14"]
 
 [smoke]
-imports = ["temporalio.contrib.google_adk_agents.workflow"]
+imports = ["temporalio.google_adk.workflow"]

@@ -17,10 +17,10 @@ human-in-the-loop, and bounded history on top.
 ## Install
 
 ```bash
-uv add "temporalio[deepagents]"
+uv add "temporalio-deepagents"
 ```
 
-(or `pip install "temporalio[deepagents]"`). Requires Python ≥ 3.11 (the same
+(or `pip install "temporalio-deepagents"`). Requires Python ≥ 3.11 (the same
 floor `deepagents` sets).
 
 ## Hello world
@@ -32,7 +32,7 @@ from datetime import timedelta
 from deepagents import create_deep_agent  # no import guard needed; see below
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib.deepagents import (
+from temporalio.deepagents import (
     DeepAgentsPlugin,
     create_temporal_deep_agent,
 )
@@ -108,7 +108,7 @@ calls and tool calls have different timeout profiles:
 ```python
 from datetime import timedelta
 
-from temporalio.contrib.deepagents import DeepAgentsPlugin
+from temporalio.deepagents import DeepAgentsPlugin
 
 plugin = DeepAgentsPlugin(
     # A single config, or a map keyed by MODEL name (thinking-mode models get
@@ -129,7 +129,7 @@ from datetime import timedelta
 
 from langchain_core.tools import tool
 from temporalio import activity
-from temporalio.contrib.deepagents import activity_as_tool, tool_as_activity
+from temporalio.deepagents import activity_as_tool, tool_as_activity
 
 
 @activity.defn
@@ -171,7 +171,7 @@ from datetime import timedelta
 
 from deepagents.backends import FilesystemBackend
 from temporalio import workflow
-from temporalio.contrib.deepagents import TemporalBackend, create_temporal_deep_agent
+from temporalio.deepagents import TemporalBackend, create_temporal_deep_agent
 
 
 @workflow.defn
@@ -207,7 +207,7 @@ is used as-is:
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from temporalio import workflow
-from temporalio.contrib.deepagents import create_temporal_deep_agent
+from temporalio.deepagents import create_temporal_deep_agent
 
 
 @workflow.defn
@@ -257,7 +257,7 @@ aggregated final message still returns to the workflow, so the durable result
 is identical to the non-streaming path:
 
 ```python
-from temporalio.contrib.deepagents import DeepAgentsPlugin
+from temporalio.deepagents import DeepAgentsPlugin
 
 plugin = DeepAgentsPlugin(streaming_topic="agent-stream")
 ```
@@ -276,7 +276,7 @@ mode — it accounts for history length *and* size):
 ```python
 from deepagents import create_deep_agent
 from temporalio import workflow
-from temporalio.contrib.deepagents import run_deep_agent
+from temporalio.deepagents import run_deep_agent
 
 
 @workflow.defn
@@ -318,12 +318,12 @@ pass `TemporalModel("provider:name")` yourself.
 ## Composing with other plugins
 
 This plugin carries no tracing context of its own. For observability, compose it
-with `temporalio.contrib.langsmith` or `temporalio.contrib.opentelemetry` —
+with `temporalio.langsmith` or `temporalio.contrib.opentelemetry` —
 registration order does not matter:
 
 ```python
 from temporalio.client import Client
-from temporalio.contrib.deepagents import DeepAgentsPlugin
+from temporalio.deepagents import DeepAgentsPlugin
 
 
 async def connect():
@@ -337,4 +337,4 @@ async def connect():
 ```
 
 For agents built directly as LangGraph graphs (rather than a compiled Deep
-Agent), see `temporalio.contrib.langgraph`.
+Agent), see `temporalio.langgraph`.

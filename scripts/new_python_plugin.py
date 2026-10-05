@@ -59,12 +59,7 @@ def main(argv: list[str]) -> int:
     name = args.name
     validate_name(name)
     coordinate = args.coordinate or "temporalio-" + name.replace("_", "-")
-    module = f"temporalio.{name}"
-    if args.upstream:
-        upstream_path = args.upstream.partition(":")[2]
-        if not re.fullmatch(r"temporalio/contrib/[a-z][a-z0-9_]*", upstream_path):
-            sys.exit("error: --upstream must name a temporalio/contrib/<module> source path")
-        module = upstream_path.replace("/", ".")
+    module = f"temporalio.contrib.{name}" if args.upstream else f"temporalio.{name}"
     substitutions = {
         "__NAME__": name,
         "__COORDINATE__": coordinate,

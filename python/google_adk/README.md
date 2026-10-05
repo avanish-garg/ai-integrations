@@ -2,6 +2,12 @@
 
 This package provides the integration layer between the Google ADK and Temporal. It allows ADK Agents to run reliably within Temporal Workflows by ensuring determinism and correctly routing external calls (network I/O) through Temporal Activities.
 
+## Install
+
+```bash
+uv add temporalio-google-adk
+```
+
 ## Benefits of Temporal to the ADK
 
 Temporal provides a holistic, unified solution that centralizes your orchestration needs in one Workflow abstraction. Rather than cobbling together separate servers, task queues, gateways, and databases, you get:
@@ -70,7 +76,7 @@ Model calls are intercepted and executed as Temporal activities with configurabl
 
 **Agent (Workflow) Side:**
 ```python
-from temporalio.contrib.google_adk_agents import TemporalModel
+from temporalio.google_adk import TemporalModel
 from temporalio.workflow import ActivityConfig
 from google.adk import Agent
 
@@ -87,7 +93,7 @@ agent = Agent(
 ```python
 from temporalio.client import Client
 from temporalio.worker import Worker
-from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
+from temporalio.google_adk import GoogleAdkPlugin
 
 client = await Client.connect(
     "localhost:7233",
@@ -115,7 +121,7 @@ from mcp import StdioServerParameters
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from temporalio.contrib.google_adk_agents import (
+from temporalio.google_adk import (
     GoogleAdkPlugin,
     TemporalMcpToolSetProvider,
     TemporalMcpToolSet,
@@ -181,7 +187,7 @@ tool, declare a parameter named `tool_context` annotated with
 from datetime import timedelta
 
 from temporalio import activity
-from temporalio.contrib.google_adk_agents.workflow import (
+from temporalio.google_adk.workflow import (
     ToolContextSnapshot,
     activity_as_tool,
 )
@@ -263,7 +269,7 @@ activities:
 
 ```python
 from google.adk.workflow import JoinNode, Workflow
-from temporalio.contrib.google_adk_agents.workflow import activity_node
+from temporalio.google_adk.workflow import activity_node
 
 fetch = activity_node(fetch_data, start_to_close_timeout=timedelta(seconds=30))
 
@@ -315,7 +321,7 @@ workflow that pause becomes a durable wait. The
 helpers cover the wire format; the wait itself is ordinary workflow code:
 
 ```python
-from temporalio.contrib.google_adk_agents import (
+from temporalio.google_adk import (
     HitlRequest,
     hitl_input_response,
     pending_hitl_requests,

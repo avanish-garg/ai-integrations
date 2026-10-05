@@ -51,9 +51,6 @@ STANDARD_TEST_SUPPORT = {
     "tests/test_installed_matches_source.py": "tests/test_installed_matches_source.py.tmpl",
 }
 PYTHON_DEVELOPMENT_VERSION = "0.0.0"
-# Imported code keeps these SDK module names until ownership handoff. Folder and
-# distribution names already follow the destination naming convention.
-SDK_MODULE_NAMES = {"google_adk": "google_adk_agents", "strands_agents": "strands"}
 
 
 class Checker:
@@ -130,10 +127,7 @@ class Checker:
         package_parts = (
             root_api.split(".")
             if isinstance(root_api, str)
-            and root_api in {
-                f"temporalio.contrib.{SDK_MODULE_NAMES.get(name, name)}",
-                f"temporalio.{name}",
-            }
+            and root_api in {f"temporalio.contrib.{name}", f"temporalio.{name}"}
             else ["temporalio", "contrib", name]
         )
         package_rel = Path("src", *package_parts)
@@ -195,8 +189,7 @@ class Checker:
         expected_coordinate = "temporalio-" + plugin.name.replace("_", "-")
         root_api = p.get("root-api")
         expected_root_api = "temporalio." + plugin.name
-        transitional_root_api = "temporalio.contrib." + SDK_MODULE_NAMES.get(plugin.name, plugin.name)
-        expected_upstream = "temporalio/sdk-python:" + transitional_root_api.replace(".", "/")
+        transitional_root_api = "temporalio.contrib." + plugin.name
         if p.get("name") != plugin.name:
             self.fail(f"{rel}: plugin.toml name {p.get('name')!r} must equal the folder name {plugin.name!r}")
         if p.get("language") != plugin.language:
@@ -209,7 +202,6 @@ class Checker:
         is_transitional_root = (
             root_api == transitional_root_api
             and isinstance(p.get("upstream"), str)
-            and (plugin.name not in SDK_MODULE_NAMES or p.get("upstream") == expected_upstream)
             and release.get("allow-final") is False
         )
         if root_api != expected_root_api and not is_transitional_root:

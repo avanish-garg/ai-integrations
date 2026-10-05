@@ -25,9 +25,7 @@ Key properties:
 ## Install
 
 ```bash
-uv add temporalio google-genai
-# For client-side MCP support, also:
-uv add mcp
+uv add temporalio-google-genai
 ```
 
 ## Hello World
@@ -41,7 +39,7 @@ from google.genai import types
 
 from temporalio import activity, workflow
 from temporalio.client import Client
-from temporalio.contrib.google_genai import (
+from temporalio.google_genai import (
     GoogleGenAIPlugin,
     TemporalAsyncClient,
     activity_as_tool,
@@ -147,7 +145,7 @@ import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from temporalio.contrib.google_genai import TemporalMcpClientSession
+from temporalio.google_genai import TemporalMcpClientSession
 
 
 # ---- worker: a factory yielding a connected, initialized session ----
@@ -196,7 +194,7 @@ of per turn.
 `generate_content_stream` works as usual — the workflow iterates chunks (batched
 from the activity). To let an **external** consumer (a chat UI) observe chunks in
 real time while the workflow runs durably, set `streaming_topic` on the client
-and host a [`WorkflowStream`](../workflow_streams/) in the workflow. Each
+and host a [`WorkflowStream`](https://github.com/temporalio/sdk-python/tree/6adc0d84290a79952dee3ef02c36f6ed9334874a/temporalio/contrib/workflow_streams/) in the workflow. Each
 streamed `GenerateContentResponse` is published to that topic as it arrives:
 
 ```python

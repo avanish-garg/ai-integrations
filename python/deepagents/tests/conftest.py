@@ -100,12 +100,3 @@ def pytest_cmdline_main(config):  # type: ignore[reportMissingParameterType, rep
 def env_type() -> str:
     """The imported continue-as-new test requires a local development server."""
     return "local"
-
-
-@pytest.fixture(autouse=True)
-def standalone_readme_path(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Point the unchanged upstream README tests at the standalone package README."""
-    if request.node.path.name == "test_readme.py":
-        monkeypatch.setattr(request.module, "README", PLUGIN_ROOT / "README.md")

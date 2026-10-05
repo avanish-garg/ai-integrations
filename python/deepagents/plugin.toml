@@ -5,16 +5,15 @@ name = "deepagents"
 language = "python"
 coordinate = "temporalio-deepagents"
 registry = "pypi"
-root-api = "temporalio.contrib.deepagents"
+root-api = "temporalio.deepagents"
 maturity = "experimental"
 docs = "https://docs.temporal.io/develop/python/integrations/deepagents"
-upstream = "temporalio/sdk-python:temporalio/contrib/deepagents"
 
 [release]
-allow-final = false
+allow-final = true
 
 [ci]
 runtime-versions = ["3.11", "3.14"]
 
 [smoke]
-imports = ["temporalio.contrib.deepagents.workflow"]
+imports = ["temporalio.deepagents.workflow"]

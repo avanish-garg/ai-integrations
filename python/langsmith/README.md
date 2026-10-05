@@ -6,17 +6,17 @@ This Temporal [Plugin](https://docs.temporal.io/develop/plugins-guide) allows yo
 
 ## Quick Start
 
-Install Temporal with the LangSmith feature enabled:
+Install the Temporal LangSmith plugin:
 
 ```bash
-uv add temporalio[langsmith]
+uv add temporalio-langsmith
 ```
 
 Register the Plugin on your Temporal Client. You need it on both the Client (starter) side and the Workers:
 
 ```python
 from temporalio.client import Client
-from temporalio.contrib.langsmith import LangSmithPlugin
+from temporalio.langsmith import LangSmithPlugin
 
 client = await Client.connect(
     "localhost:7233",

@@ -5,16 +5,15 @@ name = "strands_agents"
 language = "python"
 coordinate = "temporalio-strands-agents"
 registry = "pypi"
-root-api = "temporalio.contrib.strands"
+root-api = "temporalio.strands_agents"
 maturity = "experimental"
 docs = "https://docs.temporal.io/develop/python/integrations/strands-agents"
-upstream = "temporalio/sdk-python:temporalio/contrib/strands"
 
 [release]
-allow-final = false
+allow-final = true
 
 [ci]
 runtime-versions = ["3.10", "3.14"]
 
 [smoke]
-imports = ["temporalio.contrib.strands.workflow"]
+imports = ["temporalio.strands_agents.workflow"]

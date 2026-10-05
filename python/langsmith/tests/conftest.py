@@ -13,6 +13,12 @@ import pytest_asyncio
 from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 from tests import DEV_SERVER_DOWNLOAD_VERSION
+from tests.helpers.langsmith import (
+    clear_langsmith_env_cache as clear_langsmith_env_cache,
+)
+from tests.helpers.langsmith import (
+    enable_langsmith_tracing as enable_langsmith_tracing,
+)
 from tests.helpers.plugin_meta import load_plugin_meta
 from tests.helpers.provenance import ProvenanceError, check_provenance
 
