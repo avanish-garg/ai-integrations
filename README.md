@@ -11,7 +11,7 @@ cadence, laid out as `<language>/<integration>/`.
 | [`python/google_genai`](python/google_genai) | `temporalio-google-genai` | `temporalio.google_genai` | [Public Preview](https://docs.temporal.io/develop/python/integrations/google-genai) |
 | [`python/langgraph`](python/langgraph) | `temporalio-langgraph` | `temporalio.langgraph` | [Public Preview](https://docs.temporal.io/develop/python/integrations/langgraph) |
 | [`python/langsmith`](python/langsmith) | `temporalio-langsmith` | `temporalio.langsmith` | [Public Preview](https://docs.temporal.io/develop/python/integrations/langsmith) |
-| [`python/mcp`](python/mcp) | [`temporalio-mcp`](https://pypi.org/project/temporalio-mcp/) | `temporalio.mcp` | [Experimental](https://github.com/temporalio/ai-integrations/blob/main/python/mcp/README.md) |
+| [`python/mcp`](python/mcp) | [`temporalio-mcp`](https://pypi.org/project/temporalio-mcp/) | `temporalio.mcp` | [Pre-release](https://github.com/temporalio/ai-integrations/blob/main/python/mcp/README.md) |
 | [`python/openai_agents`](python/openai_agents) | [`temporalio-openai-agents`](https://pypi.org/project/temporalio-openai-agents/) | `temporalio.openai_agents` | [Generally Available](https://temporal.io/blog/announcing-openai-agents-sdk-integration) |
 | [`python/strands_agents`](python/strands_agents) | `temporalio-strands-agents` | `temporalio.strands_agents` | [Public Preview](https://docs.temporal.io/develop/python/integrations/strands-agents) |
 

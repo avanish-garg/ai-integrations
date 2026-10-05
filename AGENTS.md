@@ -58,9 +58,9 @@ while `[release] allow-final = false`.
 Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree): `ga` =
 `Development Status :: 5 - Production/Stable`; `preview` = `4 - Beta`; `experimental` = `3 - Alpha`.
 Use each plugin's public Temporal documentation for its release stage. In READMEs, use
-the documented labels: Pre-release maps to `experimental`, Public Preview to `preview`,
-and Generally Available to `ga`. MCP's public package README labels it Experimental,
-which also maps to `experimental`. Feature-specific stages do not change a plugin's
+the three release-stage labels: Pre-release maps to `experimental`, Public Preview to
+`preview`, and Generally Available to `ga`. Experimental is an internal maturity value,
+not a release-stage label. Feature-specific stages do not change a plugin's
 overall maturity (for example, OpenAI Agents is Generally Available with preview or experimental features).
 
 ## Repository invariants
