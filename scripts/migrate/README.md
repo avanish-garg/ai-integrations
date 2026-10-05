@@ -99,6 +99,8 @@ without rewriting every imported SHA.
 
 Run `scripts/migrate/extract-sdk-java.sh` with a default-branch-reachable `SRC_REF`.
 The frozen mapping covers `temporal-spring-ai/` and `contrib/temporal-spring-ai/`.
+The frozen `replace-message-java.txt` rule qualifies issue and PR references as
+`temporalio/sdk-java#NNN` so imported messages retain their upstream links.
 At be01e60acc1e2ccfb20e783a9770bad745ed85c1 there are 12 rewritten commits
 (13 upstream path commits; the directory-only rename becomes empty), one author
 identity, 33 main Java files, one resource, and 14 test files. Source and tests

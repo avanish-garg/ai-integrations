@@ -46,7 +46,9 @@ repositories {
             authentication { header(HttpHeaderAuthentication) }
         }
     }
-    mavenCentral()
+    mavenCentral {
+        content { excludeModule(''' + json.dumps(group) + ', ' + json.dumps(artifact) + ''') }
+    }
 }
 dependencies {
 ''' + quoted_deps + '''

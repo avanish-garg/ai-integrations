@@ -26,5 +26,6 @@ from an immutable release tag before testing and building; do not commit release
 version bumps. No `0.0.0` artifacts are published.
 
 TRANSITION(sdk-cutover): final standalone publication remains disabled until
-sdk-java stops publishing this coordinate. Migration adaptations use the root MIT
-license; historical upstream commits retain their original licensing records.
+sdk-java stops publishing this coordinate. The imported implementation and tests,
+as well as the migration adaptations, are relicensed under the repository's MIT
+license. Historical upstream commits retain their original licensing records.

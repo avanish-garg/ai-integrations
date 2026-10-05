@@ -28,6 +28,7 @@ uvx --from "git-filter-repo==$FILTER_REPO_VERSION" git-filter-repo \
   --path-rename "contrib/temporal-spring-ai/build.gradle:$P/_upstream/build.gradle" \
   --path-rename "temporal-spring-ai/:$P/" \
   --path-rename "contrib/temporal-spring-ai/:$P/" \
+  --replace-message "$REPO/scripts/migrate/replace-message-java.txt" \
   --commit-callback '
 commit.message = commit.message.rstrip(b"\n") + b"\n\nMigrated-From: temporalio/sdk-java@" + commit.original_id + b"\n"'
 
