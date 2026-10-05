@@ -185,7 +185,8 @@ def test_java_release_reuses_tested_bytes_and_recovers_deployments() -> None:
     doc = yaml.safe_load((REPO / ".github/workflows/release-java.yml").read_text())
     jobs = doc["jobs"]
     assert doc[True]["push"]["tags"] == ["java/*/v*"]
-    assert doc["concurrency"]["group"] == "release-${{ inputs.tag || github.ref }}"
+    # Tag pushes and dispatches with a matching tag input must use the same full ref.
+    assert doc["concurrency"]["group"] == "release-${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
     assert jobs["test"]["uses"] == "./.github/workflows/_java-plugin.yml"
     assert jobs["test"]["with"]["version"] == "${{ needs.prepare.outputs.version }}"
     assert set(jobs["stage"]["needs"]) == {"prepare", "test"}
