@@ -395,7 +395,8 @@ public class ActivityChatModel implements ChatModel {
                 null,
                 null,
                 toolCalls,
-                mediaContents));
+                mediaContents,
+                assistantMessage.getMetadata()));
       }
       case TOOL -> {
         ToolResponseMessage toolMessage = (ToolResponseMessage) message;
@@ -517,7 +518,7 @@ public class ActivityChatModel implements ChatModel {
 
     return AssistantMessage.builder()
         .content(message.rawContent())
-        .properties(Map.of())
+        .properties(message.metadata() != null ? message.metadata() : Map.of())
         .toolCalls(toolCalls)
         .media(media)
         .build();

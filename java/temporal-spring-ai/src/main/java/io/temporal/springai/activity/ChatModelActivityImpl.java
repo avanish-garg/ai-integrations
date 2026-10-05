@@ -5,6 +5,7 @@ import io.temporal.springai.model.ChatModelTypes.Message;
 import io.temporal.springai.util.ChatOptionsCodec;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -207,7 +208,7 @@ public class ChatModelActivityImpl implements ChatModelActivity {
       case ASSISTANT ->
           AssistantMessage.builder()
               .content(message.rawContent())
-              .properties(Map.of())
+              .properties(assistantMetadata(message))
               .toolCalls(
                   message.toolCalls() != null
                       ? message.toolCalls().stream()
@@ -235,6 +236,34 @@ public class ChatModelActivityImpl implements ChatModelActivity {
                           message.toolCallId(), message.name(), message.rawContent())))
               .build();
     };
+  }
+
+  private Map<String, Object> assistantMetadata(Message message) {
+    if (message.metadata() == null) {
+      return Map.of();
+    }
+    Map<String, Object> metadata = new HashMap<>(message.metadata());
+    Object thinking = metadata.get("anthropicThinkingContents");
+    if (thinking instanceof List<?> blocks && !blocks.isEmpty()) {
+      // Temporal decodes metadata as JSON maps. Anthropic expects its typed records in
+      // this property, even on a plain AssistantMessage. Restore them only on the worker
+      // so the plugin and workflow remain independent of the optional provider module.
+      try {
+        Class<?> contentType =
+            Class.forName(
+                "org.springframework.ai.anthropic.AnthropicChatModel$AnthropicThinkingContent",
+                true,
+                Thread.currentThread().getContextClassLoader());
+        metadata.put(
+            "anthropicThinkingContents",
+            OPTIONS_MAPPER.convertValue(
+                blocks,
+                OPTIONS_MAPPER.getTypeFactory().constructCollectionType(List.class, contentType)));
+      } catch (ClassNotFoundException | JacksonException e) {
+        throw new IllegalArgumentException("Could not restore Anthropic thinking continuation", e);
+      }
+    }
+    return metadata;
   }
 
   private Media toMedia(ChatModelTypes.MediaContent mediaContent) {
@@ -311,7 +340,13 @@ public class ChatModelActivityImpl implements ChatModelActivity {
     }
 
     return new Message(
-        assistantMessage.getText(), Message.Role.ASSISTANT, null, null, toolCalls, mediaContents);
+        assistantMessage.getText(),
+        Message.Role.ASSISTANT,
+        null,
+        null,
+        toolCalls,
+        mediaContents,
+        assistantMessage.getMetadata());
   }
 
   private ChatModelTypes.MediaContent fromMedia(Media media) {
