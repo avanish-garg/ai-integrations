@@ -6,6 +6,8 @@ import tomllib
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 from conftest import commit_all, init_repo
 
 import check_conventions
@@ -87,3 +89,36 @@ def test_upstream_mode_uses_transitional_layout(tmp_path: Path) -> None:
     assert metadata["release"]["allow-final"] is False
     assert (package / "py.typed").is_file()
     assert not (plugin / "src/temporalio/fakeplug").exists()
+
+
+@pytest.mark.parametrize(
+    ("name", "upstream_name"),
+    [("google_adk", "google_adk_agents"), ("strands_agents", "strands")],
+)
+def test_upstream_module_name_can_differ_from_folder(tmp_path: Path, name: str, upstream_name: str) -> None:
+    repo = init_repo(tmp_path / "repo")
+    package = repo / f"python/{name}/src/temporalio/contrib/{upstream_name}"
+    package.mkdir(parents=True)
+    original = b'"""Imported package."""\n'
+    (package / "__init__.py").write_bytes(original)
+    scaffolder = load_scaffolder()
+    scaffolder.REPO_ROOT = repo
+    scaffolder.TEMPLATE = REPO / "python/_template"
+    upstream = f"temporalio/sdk-python:temporalio/contrib/{upstream_name}"
+    assert scaffolder.main([name, "--description", "Imported", "--existing", "--upstream", upstream]) == 0
+    plugin = repo / f"python/{name}"
+    metadata = tomllib.loads((plugin / "plugin.toml").read_text())
+    assert metadata["plugin"]["root-api"] == f"temporalio.contrib.{upstream_name}"
+    assert metadata["plugin"]["coordinate"] == "temporalio-" + name.replace("_", "-")
+    assert (package / "__init__.py").read_bytes() == original
+    assert (package / "py.typed").is_file()
+    assert not (plugin / f"src/temporalio/contrib/{name}").exists()
+    (plugin / "uv.lock").write_text("version = 1\n")
+    commit_all(repo, "add imported plugin")
+    assert check_conventions.Checker(repo).run(nightly=False) == []
+    # The API alias is valid only for this exact migration source and before cutover.
+    meta = plugin / "plugin.toml"
+    meta.write_text(meta.read_text().replace(upstream, "other/repo:" + upstream.partition(":")[2]))
+    assert any("allowed only for an upstream-backed migration" in x for x in check_conventions.Checker(repo).run(nightly=False))
+    meta.write_text(meta.read_text().replace("other/repo:", "temporalio/sdk-python:").replace("allow-final = false", "allow-final = true"))
+    assert any("allowed only for an upstream-backed migration" in x for x in check_conventions.Checker(repo).run(nightly=False))

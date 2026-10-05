@@ -61,6 +61,20 @@ def test_relative_readme_links_are_forbidden(plugin_repo: Path) -> None:
     assert any("relative link" in x for x in run(plugin_repo))
 
 
+@pytest.mark.parametrize("readme", ['"README.pypi.md"', '{file = "README.pypi.md", content-type = "text/markdown"}'])
+def test_published_readme_is_checked_instead_of_imported_readme(plugin_repo: Path, readme: str) -> None:
+    plugin = plugin_repo / "python/fakeplug"
+    (plugin / "README.md").write_text("Imported [SDK docs](../opentelemetry)\n")
+    manifest = plugin / "pyproject.toml"
+    manifest.write_text(manifest.read_text().replace('readme = "README.md"', f"readme = {readme}"))
+    published = plugin / "README.pypi.md"
+    assert any("published README README.pypi.md is missing" in x for x in run(plugin_repo))
+    published.write_text("Published [SDK docs](https://github.com/temporalio/sdk-python)\n")
+    assert run(plugin_repo) == []
+    published.write_text("Published [SDK docs](../opentelemetry)\n")
+    assert any("README.pypi.md:1: relative link" in x for x in run(plugin_repo))
+
+
 def test_plugin_folder_suffix_and_language_lockfile(plugin_repo: Path) -> None:
     (plugin_repo / "python/uv.lock").write_text("")
     (plugin_repo / "python/foo_plugin").mkdir()

@@ -94,3 +94,59 @@ git log --all --oneline --follow -- temporalio/contrib/<name>/__init__.py
 Add a `case` entry to `extract-sdk-python.sh` with every path found (filters first, renames
 second, README rename before directory rename). Missing a historical path cannot be fixed later
 without rewriting every imported SHA.
+
+## Remaining Python plugin imports (2026-10-05)
+
+Five initial imports are pinned to sdk-python `main` at
+`6adc0d84290a79952dee3ef02c36f6ed9334874a`. Google ADK is pinned to
+`d61b3f3ad3dcfd9187fa6012b5d77de2d5b4cb9f`, the parent of #1854. That merged PR
+requires the named `workflow.new_random(name)` API, absent from the latest published SDK
+(1.34.0); re-sync Google ADK after an SDK release contains it. Both SHAs are reachable from
+upstream `main`. Their source and plugin-specific tests are
+unchanged. Path archaeology found no earlier locations outside their current package and test
+trees. Expected filtered history counts are:
+
+| Folder | Upstream module | Commits | Identities |
+|---|---|---|---|
+| deepagents | deepagents | 6 | 4 |
+| google_adk | google_adk_agents | 22 | 11 |
+| google_genai | google_genai | 8 | 4 |
+| langgraph | langgraph | 7 | 2 |
+| langsmith | langsmith | 12 | 5 |
+| strands_agents | strands | 6 | 2 |
+
+The initial live GitHub audit inspected all 64 open issues and the changed files of all 16 open
+PRs. None then touched these plugin source or test trees. The related open PRs
+[sdk-python#1805](https://github.com/temporalio/sdk-python/pull/1805),
+[sdk-python#1811](https://github.com/temporalio/sdk-python/pull/1811), and
+[sdk-python#1891](https://github.com/temporalio/sdk-python/pull/1891) concern SDK-owned Workflow
+Streams or OpenTelemetry and are not imported. Closed DeepAgents alternatives #1902 and #1904
+are unmerged; the merged fix #1901 is included instead. Recent merged plugin fixes, including
+#1865, #1873, #1887, #1899 and #1908, are reachable from the pinned SHAs. #1854 is merged
+on `main` but deferred for the SDK compatibility reason above.
+
+Each plugin has its own canonical provenance support and local server fixtures. Shared upstream
+helpers are copied only where used: `new_worker` for Google GenAI and LangSmith, Nexus/trace
+helpers for LangSmith, and the span formatter and provider-reset fixtures for Google ADK.
+DeepAgents sets the low history-count threshold required by its server-suggested continue-as-new
+test. Its README fixture points the unchanged upstream README tests at the standalone
+distribution README. Imported provider tests use local models, mock transports or in-process MCP servers.
+Final releases remain disabled while `plugin.toml` still names the SDK upstream.
+
+Google GenAI and Strands select separate `README.pypi.md` files for package metadata.
+These copies resolve upstream-relative links to the pinned SDK tree, while the imported
+READMEs remain unchanged. The conventions check validates the README actually published.
+
+The shared make targets keep a lowest-direct lock through lint and tests instead of
+allowing `uv run` to replace it. Minimum-dependency validation sets the LangGraph floor
+to 1.2.0 (the imported adapter uses `Runtime.execution_info`), Google ADK OpenTelemetry
+to 1.40.0 (its MCP semantic-convention imports), and pytest-asyncio to 0.21.2
+(the compatible pytest 9 fixture implementation). Google ADK test setup preloads OpenAI
+types before workflow tasks to avoid cold-import deadlock detection on Python 3.10.
+
+At the final audit, 63 issues and 16 PRs were open. A new draft,
+[sdk-python#1923](https://github.com/temporalio/sdk-python/pull/1923), removes the bundled
+implementations and forwards to the planned final APIs. It depends on publishing these
+packages after cutover and is not an import input. The newer SDK main commit
+`3f29fd7935f9a03fbe86f24624dfe6458872098e` does not change the five plugins pinned to
+`6adc0d84290a79952dee3ef02c36f6ed9334874a`.

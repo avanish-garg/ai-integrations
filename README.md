@@ -6,8 +6,14 @@ cadence, laid out as `<language>/<integration>/`.
 
 | Plugin | Package | Root API | Maturity |
 |---|---|---|---|
+| [`python/deepagents`](python/deepagents) | `temporalio-deepagents` (migrating) | `temporalio.contrib.deepagents` | Experimental |
+| [`python/google_adk`](python/google_adk) | `temporalio-google-adk` (migrating) | `temporalio.contrib.google_adk_agents` | Preview |
+| [`python/google_genai`](python/google_genai) | `temporalio-google-genai` (migrating) | `temporalio.contrib.google_genai` | Experimental |
+| [`python/langgraph`](python/langgraph) | `temporalio-langgraph` (migrating) | `temporalio.contrib.langgraph` | Experimental |
+| [`python/langsmith`](python/langsmith) | `temporalio-langsmith` (migrating) | `temporalio.contrib.langsmith` | Experimental |
 | [`python/mcp`](python/mcp) | [`temporalio-mcp`](https://pypi.org/project/temporalio-mcp/) | `temporalio.mcp` | Experimental |
 | [`python/openai_agents`](python/openai_agents) | [`temporalio-openai-agents`](https://pypi.org/project/temporalio-openai-agents/) | `temporalio.openai_agents` | GA |
+| [`python/strands_agents`](python/strands_agents) | `temporalio-strands-agents` (migrating) | `temporalio.contrib.strands` | Experimental |
 
 More plugins are migrating here from the SDK repositories; see the target table in
 [`AGENTS.md`](AGENTS.md).

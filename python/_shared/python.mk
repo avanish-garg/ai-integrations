@@ -17,7 +17,11 @@ endif
 export UV_NO_EDITABLE := 1
 
 PYTEST_ARGS ?=
-PYTEST := uv run pytest -n auto --dist=worksteal
+# uv run also resolves dependencies. Preserve a lowest-direct lock for lint and
+# tests, and fail rather than silently changing it after the sync step.
+LOCK_RESOLUTION := $(if $(shell sed -n '/^resolution-mode = "lowest-direct"$$/p' uv.lock 2>/dev/null),lowest-direct,highest)
+UV_RUN := uv run --locked --resolution $(LOCK_RESOLUTION)
+PYTEST := $(UV_RUN) pytest -n auto --dist=worksteal
 
 .PHONY: help sync sync-latest sync-lowest format lint test build clean
 
@@ -45,16 +49,16 @@ sync-lowest: ## Re-lock to the lowest allowed direct versions and install (night
 	uv sync --locked --resolution lowest-direct --reinstall-package $(DIST)
 
 format: ## Fix import order and formatting
-	uv run ruff check --select I --fix
-	uv run ruff format
+	$(UV_RUN) ruff check --select I --fix
+	$(UV_RUN) ruff format
 
 lint: ## Import order, formatting, pyright, mypy, basedpyright, docstrings
-	uv run ruff check --select I
-	uv run ruff format --check
-	uv run pyright
-	uv run mypy
-	uv run basedpyright
-	uv run pydocstyle --ignore-decorators=overload src
+	$(UV_RUN) ruff check --select I
+	$(UV_RUN) ruff format --check
+	$(UV_RUN) pyright
+	$(UV_RUN) mypy
+	$(UV_RUN) basedpyright
+	$(UV_RUN) pydocstyle --ignore-decorators=overload src
 
 test: ## Run the suite against a local dev server
 	$(PYTEST) $(PYTEST_ARGS)

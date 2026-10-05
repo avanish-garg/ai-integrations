@@ -16,7 +16,7 @@ Checks (see AGENTS.md, "Repository invariants" and "Python conventions"):
   * plugin.toml schema and agreement with pyproject.toml (name/coordinate/root-api/
     maturity classifier/requires-python floor/module-name/required-version)
   * no [tool.uv.sources] path or workspace entries
-  * README has no relative markdown links (PyPI renders the README)
+  * the project's published README has no relative markdown links (PyPI renders it)
   * --nightly: coordinates with [release] allow-final = false must not exist on PyPI yet
 """
 
@@ -51,6 +51,9 @@ STANDARD_TEST_SUPPORT = {
     "tests/test_installed_matches_source.py": "tests/test_installed_matches_source.py.tmpl",
 }
 PYTHON_DEVELOPMENT_VERSION = "0.0.0"
+# Imported code keeps these SDK module names until ownership handoff. Folder and
+# distribution names already follow the destination naming convention.
+SDK_MODULE_NAMES = {"google_adk": "google_adk_agents", "strands_agents": "strands"}
 
 
 class Checker:
@@ -127,7 +130,10 @@ class Checker:
         package_parts = (
             root_api.split(".")
             if isinstance(root_api, str)
-            and root_api in {f"temporalio.contrib.{name}", f"temporalio.{name}"}
+            and root_api in {
+                f"temporalio.contrib.{SDK_MODULE_NAMES.get(name, name)}",
+                f"temporalio.{name}",
+            }
             else ["temporalio", "contrib", name]
         )
         package_rel = Path("src", *package_parts)
@@ -161,7 +167,7 @@ class Checker:
             return
         self.check_plugin_toml(plugin, meta, pyproject)
         self.check_pyproject(plugin, pyproject)
-        self.check_readme(plugin)
+        self.check_readme(plugin, pyproject)
         self.check_standard_test_support(plugin)
 
     def check_standard_test_support(self, plugin: Plugin) -> None:
@@ -189,7 +195,8 @@ class Checker:
         expected_coordinate = "temporalio-" + plugin.name.replace("_", "-")
         root_api = p.get("root-api")
         expected_root_api = "temporalio." + plugin.name
-        transitional_root_api = "temporalio.contrib." + plugin.name
+        transitional_root_api = "temporalio.contrib." + SDK_MODULE_NAMES.get(plugin.name, plugin.name)
+        expected_upstream = "temporalio/sdk-python:" + transitional_root_api.replace(".", "/")
         if p.get("name") != plugin.name:
             self.fail(f"{rel}: plugin.toml name {p.get('name')!r} must equal the folder name {plugin.name!r}")
         if p.get("language") != plugin.language:
@@ -202,6 +209,7 @@ class Checker:
         is_transitional_root = (
             root_api == transitional_root_api
             and isinstance(p.get("upstream"), str)
+            and (plugin.name not in SDK_MODULE_NAMES or p.get("upstream") == expected_upstream)
             and release.get("allow-final") is False
         )
         if root_api != expected_root_api and not is_transitional_root:
@@ -274,13 +282,19 @@ class Checker:
         if "exclude-newer" in uv_cfg and exclude_newer_pkg.get("temporalio") is not False:
             self.fail(f"{rel}: exclude-newer is set but temporalio is not exempted (`exclude-newer-package = {{ temporalio = false }}`)")
 
-    def check_readme(self, plugin: Plugin) -> None:
-        readme = plugin.path / "README.md"
+    def check_readme(self, plugin: Plugin, pyproject: dict[str, Any]) -> None:
+        configured = pyproject.get("project", {}).get("readme", "README.md")
+        filename = configured.get("file") if isinstance(configured, dict) else configured
+        if not isinstance(filename, str) or Path(filename).is_absolute() or ".." in Path(filename).parts:
+            self.fail(f"{plugin.rel}: project.readme must name a file inside the plugin directory")
+            return
+        readme = plugin.path / filename
         if not readme.is_file():
+            self.fail(f"{plugin.rel}: published README {filename} is missing")
             return
         for lineno, line in enumerate(readme.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if RELATIVE_LINK.search(line):
-                self.fail(f"{plugin.rel}/README.md:{lineno}: relative link; use absolute https://github.com/... URLs (PyPI renders this file)")
+                self.fail(f"{plugin.rel}/{filename}:{lineno}: relative link; use absolute https://github.com/... URLs (PyPI renders this file)")
 
     def check_nightly(self, plugins: list[Plugin]) -> None:
         for plugin in plugins:

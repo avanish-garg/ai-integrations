@@ -30,12 +30,12 @@ resources (`python/_shared/`, `python/_template/`) and are ignored by CI discove
 |---|---|---|---|---|
 | `python/mcp` | `temporalio-mcp` | 0.1.0 | experimental | `temporalio.mcp` |
 | `python/deepagents` | `temporalio-deepagents` | 0.1.0 | experimental | `temporalio.contrib.deepagents` |
-| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | preview | `temporalio.contrib.google_adk` |
+| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | preview | `temporalio.contrib.google_adk_agents` |
 | `python/google_genai` | `temporalio-google-genai` | 0.1.0 | experimental | `temporalio.contrib.google_genai` |
 | `python/langgraph` | `temporalio-langgraph` | 0.1.0 | experimental | `temporalio.contrib.langgraph` |
 | `python/langsmith` | `temporalio-langsmith` | 0.1.0 | experimental | `temporalio.contrib.langsmith` |
 | `python/openai_agents` | `temporalio-openai-agents` | 1.0.0 | ga | `temporalio.openai_agents` |
-| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | experimental | `temporalio.contrib.strands_agents` |
+| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | experimental | `temporalio.contrib.strands` |
 | `typescript/vercel-ai-sdk` | `@temporalio/vercel-ai-sdk` | 1.0.0 | ga | `@temporalio/vercel-ai-sdk` |
 | `typescript/google-adk` | `@temporalio/google-adk` | 0.1.0 | preview | `@temporalio/google-adk` |
 | `typescript/langsmith` | `@temporalio/langsmith` | continues (1.24.0 next) | experimental | `@temporalio/langsmith` |
@@ -54,6 +54,10 @@ Naming derivation, enforced by `scripts/ci/check_conventions.py`: folder name = 
 `temporalio.<name>`; release tag = `<language>/<name>/v<version>`. Folders never end in `-plugin`
 or `_plugin`. An upstream-backed migration may temporarily retain `temporalio.contrib.<name>` only
 while `[release] allow-final = false`.
+The initial `google_adk` and `strands_agents` imports retain their actual upstream APIs,
+`temporalio.contrib.google_adk_agents` and `temporalio.contrib.strands`, under the same rule
+and only with matching sdk-python upstream paths. Their final roots remain
+`temporalio.google_adk` and `temporalio.strands_agents`.
 
 Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree): `ga` =
 `Development Status :: 5 - Production/Stable`; `preview` = `4 - Beta`; `experimental` = `3 - Alpha`.
@@ -71,6 +75,7 @@ Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree)
 ## Python conventions
 
 - Layout: `python/<name>/{pyproject.toml, uv.lock, plugin.toml, Makefile, README.md, LICENSE, src/temporalio/<name>/, tests/}`. Migrated plugins may temporarily keep the upstream source and test trees while final releases are disabled; flatten and move to the final root at cutover.
+- Preserve imported READMEs unchanged. If upstream-relative links need adaptation for PyPI, add a separate `README.pypi.md` and select it with `[project] readme`; conventions check the published README's links.
 - Build backend `uv_build` with `module-name = "temporalio.<name>"`. `py.typed` ships in the leaf package (redundant with the SDK's marker, kept on purpose).
 - Installs are non-editable. `temporalio` is a regular package owned by the SDK wheel, so an editable install of a plugin can resolve incorrectly unless the SDK extends its package path. `python/_shared/python.mk` exports `UV_NO_EDITABLE=1` and reinstalls the plugin last to support overlapping migrations; `[tool.uv] cache-keys` includes `src/**/*` so edits trigger a rebuild; `link-mode = "copy"` keeps overwrites deterministic during the transition.
 - Provenance guard (`tests/helpers/provenance.py`, mirrored by `scripts/ci/smoke.py`) runs at every pytest session start and fails loudly if the install is editable, any file differs from the distribution's RECORD, files under the package directory are not owned by the distribution, or another distribution ships the same paths. While `plugin.toml` `[release] allow-final = false`, the SDK's overlap (`temporalio<=1.32` ships `temporalio/contrib/openai_agents/*`) is tolerated with a warning. `tests/test_installed_matches_source.py` additionally byte-compares the installed package with `src/`.
@@ -85,7 +90,7 @@ One entry workflow, one reusable workflow per language, plugin as a parameter, n
 
 - `.github/workflows/ci.yml` (`pull_request`, `merge_group`, push to `main`, nightly, dispatch). Job `changes` runs `scripts/ci/detect_changes.py`: plugins are discovered from `<language>/*/<manifest>` (ignoring `_*`); a changed file under a plugin selects that plugin; a non-plugin file under a language root selects every plugin of that language; `.github/**` and `scripts/ci/**` select everything; `scripts/release/**` and `scripts/migrate/**` select only the script tests; push to `main`, nightly and dispatch select everything. Job `conventions` checks repository invariants and runs the script tests. Job `python` calls `_python-plugin.yml` once per selected plugin. Job `ci-status` fans in and is the only required check (skipped upstream jobs count as success).
 - `.github/workflows/_python-plugin.yml`: job `matrix` reads `plugin.toml` `runtime-versions` and emits the same matrix for every run, pull requests included (ubuntu at the min and max versions, macOS and Windows at max); job `test` runs `make sync` (or `sync-latest` / `sync-lowest`), `make lint`, `make test`, then, on the ubuntu/max cell only, the `python-build-check` composite action (`make build`, `check_wheel.py`, isolated `smoke.py` on wheel and sdist). Windows runners install GNU make with choco.
-- Dependency lanes: nightly runs every plugin with the newest allowed dependencies (`sync-latest`) and with the lowest allowed direct dependencies (`sync-lowest`; the sync repeats `--resolution lowest-direct`, otherwise uv discards the lowest lock and re-resolves to the newest versions), opening or updating one issue per failing plugin. The lowest-direct lane also runs, and blocks, on pull requests that change a plugin's `pyproject.toml` or `uv.lock`, because that is when floors change.
+- Dependency lanes: nightly runs every plugin with the newest allowed dependencies (`sync-latest`) and with the lowest allowed direct dependencies (`sync-lowest`; sync and subsequent tool runs preserve `--resolution lowest-direct`, otherwise uv discards the lowest lock and re-resolves to the newest versions), opening or updating one issue per failing plugin. Shared lint, test and format targets use `uv run --locked` with the lockfile's resolution mode. The lowest-direct lane also runs, and blocks, on pull requests that change a plugin's `pyproject.toml` or `uv.lock`, because that is when floors change.
 - Required checks on `main`: `ci-status`, `Check for CODEOWNERS` and `opengrep/scan` (the last two are org-enforced workflows that run automatically on every PR), plus one approving review from a code owner; `license/cla` joins once the CLA app is installed. Do not add a local opengrep caller; the org one already runs. TRANSITION(sdk-cutover): branch protection, the `testpypi`/`pypi` environments (tag policy `python/*/v*`, `@temporalio/ai-sdk` reviewers on `pypi`) and the release-tag ruleset were configured by hand on 2026-09-09.
 - Nightly failures: `scripts/ci/nightly_report.py` opens or updates one `nightly` issue per failing (lane, plugin) pair from the job names `Python (<plugin>) / ...` and `Python (lowest-direct) (<plugin>) / ...`; `scripts/tests/test_nightly_report.py` fails if `ci.yml` renames those jobs.
 

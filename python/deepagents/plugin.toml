@@ -1,0 +1,20 @@
+# Schema: ../../AGENTS.md#repository-invariants
+
+[plugin]
+name = "deepagents"
+language = "python"
+coordinate = "temporalio-deepagents"
+registry = "pypi"
+root-api = "temporalio.contrib.deepagents"
+maturity = "experimental"
+docs = "https://docs.temporal.io/develop/python/integrations/deepagents"
+upstream = "temporalio/sdk-python:temporalio/contrib/deepagents"
+
+[release]
+allow-final = false
+
+[ci]
+runtime-versions = ["3.11", "3.14"]
+
+[smoke]
+imports = ["temporalio.contrib.deepagents.workflow"]
