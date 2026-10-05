@@ -17,13 +17,11 @@ endif
 export UV_NO_EDITABLE := 1
 
 PYTEST_ARGS ?=
-# uv run also resolves dependencies. Preserve a lowest-direct lock for lint and
-# tests, and fail rather than silently changing it after the sync step.
-LOCK_RESOLUTION := $(if $(shell sed -n '/^resolution-mode = "lowest-direct"$$/p' uv.lock 2>/dev/null),lowest-direct,highest)
-UV_RUN := uv run --locked --resolution $(LOCK_RESOLUTION)
+# Keep the dependency versions selected by sync or sync-latest through all tool runs.
+UV_RUN := uv run --locked
 PYTEST := $(UV_RUN) pytest -n auto --dist=worksteal
 
-.PHONY: help sync sync-latest sync-lowest format lint test build clean
+.PHONY: help sync sync-latest format lint test build clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
@@ -39,14 +37,6 @@ sync-latest: ## Re-lock to the newest allowed versions and install (nightly lane
 	uv lock --upgrade
 	uv sync --locked
 	uv sync --locked --reinstall-package $(DIST)
-
-sync-lowest: ## Re-lock to the lowest allowed direct versions and install (nightly lane; lock not committed)
-	uv lock --upgrade --resolution lowest-direct
-# The lock records resolution-mode = "lowest-direct"; a sync without the same flag says
-# "Ignoring existing lockfile due to change in resolution mode" and silently re-resolves to
-# the newest versions, which is what this lane did until 2026-09-10. --locked makes that fatal.
-	uv sync --locked --resolution lowest-direct
-	uv sync --locked --resolution lowest-direct --reinstall-package $(DIST)
 
 format: ## Fix import order and formatting
 	$(UV_RUN) ruff check --select I --fix

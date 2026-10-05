@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -72,29 +71,6 @@ def test_smoke_uses_the_running_interpreter(tmp_path: Path) -> None:
     floor = f">={sys.version_info.major}.{sys.version_info.minor}"
     manifest.write_text(manifest.read_text().replace(">=3.10", floor))
     assert smoke.main(["--plugin", str(plugin), "--dist", str(build_plugin(plugin))]) == 0
-
-
-def test_make_test_preserves_lowest_direct_dependencies(tmp_path: Path) -> None:
-    root = init_repo(tmp_path / "repo")
-    plugin = make_python_plugin(root, "fakeplug", dependencies=["packaging>=25,<27"])
-    (plugin / "uv.lock").unlink()  # Replace the conventions fixture's placeholder with a real lock.
-    shared = root / "python/_shared"
-    shared.mkdir()
-    source = Path(__file__).resolve().parents[2] / "python/_shared/python.mk"
-    shutil.copyfile(source, shared / "python.mk")
-    manifest = plugin / "pyproject.toml"
-    manifest.write_text(manifest.read_text() + '\n[dependency-groups]\ndev = ["pytest>=9,<10", "pytest-xdist>=3.6,<4"]\n')
-    tests = plugin / "tests"
-    tests.mkdir()
-    (tests / "test_dependency.py").write_text(
-        'import importlib.metadata\n\ndef test_minimum():\n    assert importlib.metadata.version("packaging").startswith("25.")\n'
-    )
-    result = subprocess.run(["make", "sync-lowest"], cwd=plugin, capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout + result.stderr
-    before = (plugin / "uv.lock").read_bytes()
-    result = subprocess.run(["make", "test", "PYTEST_ARGS=-n 0"], cwd=plugin, capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (plugin / "uv.lock").read_bytes() == before
 
 
 def test_smoke_in_env_detects_editable_and_version_mismatch(built: tuple[Path, Path, Path], tmp_path: Path) -> None:

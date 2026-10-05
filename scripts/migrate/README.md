@@ -140,10 +140,11 @@ after the API cutover; the committed development version remains `0.0.0`.
 Google GenAI and Strands README links resolve SDK-owned dependencies to the pinned SDK
 tree. The conventions check validates the README actually published.
 
-The shared make targets keep a lowest-direct lock through lint and tests instead of
-allowing `uv run` to replace it. Minimum-dependency validation sets the LangGraph floor
-to 1.2.0 (the imported adapter uses `Runtime.execution_info`), Google ADK OpenTelemetry
-to 1.40.0 (its MCP semantic-convention imports), and pytest-asyncio to 0.21.2
+The shared make targets use the committed lockfile for regular checks and re-lock to
+the newest allowed dependencies on nightly runs. Lint and tests use `uv run --locked`
+to preserve the selected versions. Dependency floors are LangGraph 1.2.0
+(the imported adapter uses `Runtime.execution_info`), Google ADK OpenTelemetry
+1.40.0 (its MCP semantic-convention imports), and pytest-asyncio 0.21.2
 (the compatible pytest 9 fixture implementation). Google ADK test setup preloads OpenAI
 types before workflow tasks to avoid cold-import deadlock detection on Python 3.10.
 
