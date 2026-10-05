@@ -323,6 +323,8 @@ def stage(args: argparse.Namespace, coordinate: str, raw: dict[str, bytes]) -> d
         intent = args.state_dir / "upload-started.json"
         if intent.exists():
             raise PolicyError("a previous upload may have succeeded without returning its ID; inspect Portal and supply --deployment-id")
+        if args.recover_only:
+            raise PolicyError("recovery requires saved deployment state or --deployment-id; inspect Portal before retrying")
         name = next(name for name in raw if name.endswith(f"{coordinate.split(':')[1]}-{args.version}.jar"))
         if public_file(name) is not None or portal.request(f"/deployments/download/{name}", absent_ok=True) is not None:
             raise PolicyError("this Maven version already exists publicly or in Portal; recover with its deployment ID instead of uploading again")
@@ -383,6 +385,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dist", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, default=Path("release-state"))
     parser.add_argument("--deployment-id", default="")
+    parser.add_argument("--recover-only", action="store_true",
+                        help="reuse saved state or an explicit deployment ID; never start another upload")
     parser.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args(argv)

@@ -167,11 +167,15 @@ Runbook for `java/<name>`:
 7. After an upload failure, use **Re-run failed jobs**. The workflow preserves the
    signed bundle, upload intent, and deployment ID even if validation or the consumer
    fails. It reuses those signatures and never retries an ambiguous upload POST.
-   For a fresh dispatch on the same tag, supply `-f deployment-id=<Portal UUID>`;
+   A fresh publishing dispatch on the same tag requires `-f deployment-id=<Portal UUID>`;
    recovery downloads the existing signed files and rejects any rebuilt-byte
    mismatch or deployment containing additional coordinates. If an upload response
-   was lost, inspect Portal for its ID before retrying. Never move a tag or replace
-   uploaded files: a changed candidate gets the next `RCN`. Portal does not expose
+   was lost, inspect Portal for its ID before retrying. Publishing dispatches cannot
+   start a new upload, even when Portal is still validating the original upload;
+   the initial upload runs on the tag push. A dispatch with `skip-publish=true`
+   remains a credential-free dry run and does not require a deployment ID.
+   Never move a tag or replace uploaded files: a changed candidate gets the next `RCN`.
+   Portal does not expose
    TestPyPI-style staging version enumeration; public ordering is checked against
    Maven Central and an existing validated staged version requires explicit recovery.
 

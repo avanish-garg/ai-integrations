@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import base64
 import json
+import os
 import shutil
 import subprocess
 import urllib.error
@@ -12,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import maven_release as maven
 from release_tool import PolicyError
@@ -43,7 +45,7 @@ def fake_bundle(bundle: Path, raw: dict[str, bytes]) -> dict[str, bytes]:
 
 def args(tmp_path: Path, version: str = VERSION, **overrides) -> SimpleNamespace:
     values = dict(state_dir=tmp_path / "state", version=version, deployment_id="", github_output=None,
-                  smoke=False, plugin_dir=tmp_path / "plugin")
+                  smoke=False, recover_only=False, plugin_dir=tmp_path / "plugin")
     values.update(overrides)
     return SimpleNamespace(**values)
 
@@ -151,6 +153,7 @@ def test_failed_staging_preserves_id_and_rerun_never_resigns_or_uploads(tmp_path
     assert portal.uploads == 1
     assert maven.load_state(invocation.state_dir, COORDINATE, VERSION, raw)["deployment_id"] == DEPLOYMENT
     portal.wait = real_wait
+    invocation.recover_only = True
     monkeypatch.setattr(maven, "sign_bundle", lambda *a: pytest.fail("rerun re-signed artifacts"))
     maven.stage(invocation, COORDINATE, raw)
     assert portal.uploads == 1
@@ -196,6 +199,45 @@ def test_deployment_recovery_rejects_additional_coordinates() -> None:
         maven.verify_deployment(portal, DEPLOYMENT, COORDINATE, VERSION)
 
 
+@pytest.mark.parametrize("state", ["PENDING", "VALIDATING"])
+def test_fresh_dispatch_after_ambiguous_upload_never_posts_again(tmp_path: Path, monkeypatch, state: str) -> None:
+    raw = raw_files(tmp_path)
+    portal = FakePortal(state=state)
+    monkeypatch.setattr(maven, "Portal", lambda: portal)
+    monkeypatch.setattr(maven, "public_file", lambda name: None)
+    monkeypatch.setattr(maven, "sign_bundle", fake_bundle)
+    def uncertain(*a):
+        portal.uploads += 1
+        raise PolicyError("response lost after Portal accepted the upload")
+    portal.upload = uncertain
+    with pytest.raises(PolicyError, match="response lost"):
+        maven.stage(args(tmp_path), COORDINATE, raw)
+    # A new workflow run cannot retrieve the previous run's state artifact, and
+    # the shared download endpoint does not expose a deployment still validating.
+    with pytest.raises(PolicyError, match="recovery requires saved deployment state or --deployment-id"):
+        maven.stage(args(tmp_path, state_dir=tmp_path / "fresh-run", recover_only=True), COORDINATE, raw)
+    assert portal.uploads == 1
+
+
+@pytest.mark.parametrize("ref_type,skip_publish,deployment,expected", [
+    ("tag", "false", "", 1),
+    ("tag", "true", "", 0),
+    ("tag", "false", DEPLOYMENT, 0),
+    ("branch", "false", "", 0),
+    ("branch", "false", DEPLOYMENT, 1),
+])
+def test_release_dispatch_recovery_gate(ref_type: str, skip_publish: str, deployment: str, expected: int) -> None:
+    workflow_path = Path(__file__).resolve().parents[2] / ".github/workflows/release-java.yml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    gate = next(step for step in workflow["jobs"]["prepare"]["steps"]
+                if step.get("name") == "Dispatch inputs are consistent with the ref")
+    tag = "java/temporal-spring-ai/v1.41.0-RC1"
+    result = subprocess.run(["bash", "-c", gate["run"]], capture_output=True, text=True,
+                            env={**os.environ, "REF_TYPE": ref_type, "REF_NAME": tag,
+                                 "INPUT_TAG": tag, "DEPLOYMENT_ID": deployment, "SKIP_PUBLISH": skip_publish})
+    assert result.returncode == expected, result.stdout + result.stderr
+
+
 def test_fresh_dispatch_recovers_existing_signatures_and_verifies_raw_bytes(tmp_path: Path, monkeypatch) -> None:
     raw = raw_files(tmp_path)
     original = tmp_path / "original.zip"
@@ -203,7 +245,7 @@ def test_fresh_dispatch_recovers_existing_signatures_and_verifies_raw_bytes(tmp_
     portal = FakePortal(contents)
     monkeypatch.setattr(maven, "Portal", lambda: portal)
     monkeypatch.setattr(maven, "sign_bundle", lambda *a: pytest.fail("recovery must not re-sign"))
-    state = maven.stage(args(tmp_path, deployment_id=DEPLOYMENT), COORDINATE, raw)
+    state = maven.stage(args(tmp_path, deployment_id=DEPLOYMENT, recover_only=True), COORDINATE, raw)
     assert state["deployment_id"] == DEPLOYMENT and portal.uploads == 0
     assert (tmp_path / "state/bundle.zip").read_bytes() == original.read_bytes()
 

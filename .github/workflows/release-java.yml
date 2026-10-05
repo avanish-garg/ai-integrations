@@ -61,6 +61,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           INPUT_TAG: ${{ inputs.tag }}
           DEPLOYMENT_ID: ${{ inputs.deployment-id }}
+          SKIP_PUBLISH: ${{ inputs.skip-publish }}
         run: |
           if [ "$REF_TYPE" = "tag" ] && [ -n "$INPUT_TAG" ] && [ "$INPUT_TAG" != "$REF_NAME" ]; then
             echo "::error::tag input must match the dispatched tag ref"; exit 1
@@ -70,6 +71,9 @@ jobs:
           fi
           if [ "$REF_TYPE" != "tag" ] && [ -n "$DEPLOYMENT_ID" ]; then
             echo "::error::deployment recovery requires a protected tag ref"; exit 1
+          fi
+          if [ "$REF_TYPE" = "tag" ] && [ "$SKIP_PUBLISH" = "false" ] && [ -z "$DEPLOYMENT_ID" ]; then
+            echo "::error::publishing dispatches require deployment-id; inspect Portal or re-run the original tag workflow"; exit 1
           fi
       - name: Parse tag
         id: tag
@@ -158,6 +162,7 @@ jobs:
           PLUGIN_DIR: ${{ needs.prepare.outputs.plugin_dir }}
           VERSION: ${{ needs.prepare.outputs.version }}
           DEPLOYMENT_ID: ${{ inputs.deployment-id }}
+          RECOVER_ONLY: ${{ github.event_name == 'workflow_dispatch' }}
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -165,9 +170,13 @@ jobs:
           GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle-consumer
         run: |
+          RECOVERY_ARGS=()
+          if [ "$RECOVER_ONLY" = "true" ]; then
+            RECOVERY_ARGS+=(--recover-only)
+          fi
           uv run --project scripts --locked python scripts/release/maven_release.py stage \
             --plugin-dir "$PLUGIN_DIR" --version "$VERSION" --dist dist --state-dir release-state \
-            --deployment-id "$DEPLOYMENT_ID" --smoke
+            --deployment-id "$DEPLOYMENT_ID" --smoke "${RECOVERY_ARGS[@]}"
       - name: Preserve signed bundle and deployment ID for recovery
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
