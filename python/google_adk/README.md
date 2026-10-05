@@ -36,7 +36,7 @@ ADK provides: (from the [ADK overview](https://google.github.io/adk-docs/#learn-
 - **`GoogleAdkPlugin`**: Worker plugin that configures runtime determinism and Pydantic serialization
 - **`invoke_model`**: Activity for executing LLM model calls with proper error handling
 
-### MCP (Model Context Protocol) Integration  
+### MCP (Model Context Protocol) Integration
 - **`TemporalMcpToolSet`**: Executes MCP tools as Temporal activities
 - **`TemporalMcpToolSetProvider`**: Manages toolset creation and activity registration
 - Full support for tool confirmation and event actions within workflows
@@ -84,7 +84,7 @@ from google.adk import Agent
 # Add to agent
 agent = Agent(
     name="test_agent",
-    model=TemporalModel("gemini-2.5-pro", activity_config=ActivityConfig(summary="Researcher Agent")), 
+    model=TemporalModel("gemini-2.5-pro", activity_config=ActivityConfig(summary="Researcher Agent")),
 )
 ```
 
@@ -482,5 +482,5 @@ unaffected.
 This integration provides comprehensive support for running Google ADK Agents within Temporal workflows while maintaining:
 - **Determinism**: All non-deterministic operations are routed through Temporal
 - **Observability**: Full tracing and activity visibility
-- **Reliability**: Proper retry handling and error propagation  
+- **Reliability**: Proper retry handling and error propagation
 - **Extensibility**: Support for custom tools via MCP protocol
