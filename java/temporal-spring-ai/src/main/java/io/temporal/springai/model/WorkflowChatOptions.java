@@ -29,7 +29,12 @@ final class WorkflowChatOptions extends DefaultToolCallingChatOptions {
     public ToolCallingChatOptions build() {
       ToolCallingChatOptions common = super.build();
       if (provider instanceof ToolCallingChatOptions.Builder<?> providerBuilder) {
-        return providerBuilder.clone().combineWith(common.mutate()).build();
+        // combineWith appends callbacks, but common already includes the provider's list.
+        return providerBuilder
+            .clone()
+            .combineWith(common.mutate())
+            .toolCallbacks(common.getToolCallbacks())
+            .build();
       }
       return common;
     }
