@@ -7,7 +7,7 @@ language = "python"
 coordinate = "temporalio-google-adk"
 registry = "pypi"
 root-api = "temporalio.google_adk"
-maturity = "preview"
+maturity = "experimental"
 docs = "https://docs.temporal.io/develop/python/integrations/google-adk"
 
 [release]

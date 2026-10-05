@@ -30,12 +30,12 @@ resources (`python/_shared/`, `python/_template/`) and are ignored by CI discove
 |---|---|---|---|---|
 | `python/mcp` | `temporalio-mcp` | 0.1.0 | experimental | `temporalio.mcp` |
 | `python/deepagents` | `temporalio-deepagents` | 0.1.0 | experimental | `temporalio.deepagents` |
-| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | preview | `temporalio.google_adk` |
-| `python/google_genai` | `temporalio-google-genai` | 0.1.0 | experimental | `temporalio.google_genai` |
-| `python/langgraph` | `temporalio-langgraph` | 0.1.0 | experimental | `temporalio.langgraph` |
-| `python/langsmith` | `temporalio-langsmith` | 0.1.0 | experimental | `temporalio.langsmith` |
+| `python/google_adk` | `temporalio-google-adk` | 0.1.0 | experimental | `temporalio.google_adk` |
+| `python/google_genai` | `temporalio-google-genai` | 0.1.0 | preview | `temporalio.google_genai` |
+| `python/langgraph` | `temporalio-langgraph` | 0.1.0 | preview | `temporalio.langgraph` |
+| `python/langsmith` | `temporalio-langsmith` | 0.1.0 | preview | `temporalio.langsmith` |
 | `python/openai_agents` | `temporalio-openai-agents` | 1.0.0 | ga | `temporalio.openai_agents` |
-| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | experimental | `temporalio.strands_agents` |
+| `python/strands_agents` | `temporalio-strands-agents` | 0.1.0 | preview | `temporalio.strands_agents` |
 | `typescript/vercel-ai-sdk` | `@temporalio/vercel-ai-sdk` | 1.0.0 | ga | `@temporalio/vercel-ai-sdk` |
 | `typescript/google-adk` | `@temporalio/google-adk` | 0.1.0 | preview | `@temporalio/google-adk` |
 | `typescript/langsmith` | `@temporalio/langsmith` | continues (1.24.0 next) | experimental | `@temporalio/langsmith` |
@@ -57,6 +57,11 @@ while `[release] allow-final = false`.
 
 Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree): `ga` =
 `Development Status :: 5 - Production/Stable`; `preview` = `4 - Beta`; `experimental` = `3 - Alpha`.
+Use each plugin's public Temporal documentation for its release stage. In READMEs, use
+the documented labels: Pre-release maps to `experimental`, Public Preview to `preview`,
+and Generally Available to `ga`. MCP's public package README labels it Experimental,
+which also maps to `experimental`. Feature-specific stages do not change a plugin's
+overall maturity (for example, OpenAI Agents is Generally Available with preview or experimental features).
 
 ## Repository invariants
 
@@ -71,7 +76,7 @@ Maturity mapping (`plugin.toml` `maturity` and the Python classifier must agree)
 ## Python conventions
 
 - Layout: `python/<name>/{pyproject.toml, uv.lock, plugin.toml, Makefile, README.md, LICENSE, src/temporalio/<name>/, tests/}`. Migrated plugins may temporarily keep the upstream source and test trees while final releases are disabled; flatten and move to the final root at cutover.
-- Preserve imported READMEs unchanged. If upstream-relative links need adaptation for PyPI, add a separate `README.pypi.md` and select it with `[project] readme`; conventions check the published README's links.
+- While a plugin still names an `upstream`, preserve imported READMEs unchanged. If upstream-relative links need adaptation for PyPI, add a separate `README.pypi.md` and select it with `[project] readme`; conventions check the published README's links.
 - Build backend `uv_build` with `module-name = "temporalio.<name>"`. `py.typed` ships in the leaf package (redundant with the SDK's marker, kept on purpose).
 - Installs are non-editable. `temporalio` is a regular package owned by the SDK wheel, so an editable install of a plugin can resolve incorrectly unless the SDK extends its package path. `python/_shared/python.mk` exports `UV_NO_EDITABLE=1` and reinstalls the plugin last to support overlapping migrations; `[tool.uv] cache-keys` includes `src/**/*` so edits trigger a rebuild; `link-mode = "copy"` keeps overwrites deterministic during the transition.
 - Provenance guard (`tests/helpers/provenance.py`, mirrored by `scripts/ci/smoke.py`) runs at every pytest session start and fails loudly if the install is editable, any file differs from the distribution's RECORD, files under the package directory are not owned by the distribution, or another distribution ships the same paths. While `plugin.toml` `[release] allow-final = false`, the SDK's overlap (`temporalio<=1.32` ships `temporalio/contrib/openai_agents/*`) is tolerated with a warning. `tests/test_installed_matches_source.py` additionally byte-compares the installed package with `src/`.

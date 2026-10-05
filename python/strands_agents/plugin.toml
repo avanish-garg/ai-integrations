@@ -6,7 +6,7 @@ language = "python"
 coordinate = "temporalio-strands-agents"
 registry = "pypi"
 root-api = "temporalio.strands_agents"
-maturity = "experimental"
+maturity = "preview"
 docs = "https://docs.temporal.io/develop/python/integrations/strands-agents"
 
 [release]
