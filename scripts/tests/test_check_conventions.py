@@ -173,8 +173,15 @@ def test_unrelated_root_api_is_rejected(plugin_repo: Path) -> None:
 
 def test_maturity_classifier_must_agree(plugin_repo: Path) -> None:
     meta = plugin_repo / "python/fakeplug/plugin.toml"
-    meta.write_text(meta.read_text().replace('maturity = "experimental"', 'maturity = "ga"'))
+    meta.write_text(meta.read_text().replace('maturity = "pre-release"', 'maturity = "generally-available"'))
     assert any("Development Status :: 5 - Production/Stable" in x for x in run(plugin_repo))
+
+
+@pytest.mark.parametrize("maturity", ["experimental", "preview", "ga"])
+def test_legacy_maturity_values_are_rejected(plugin_repo: Path, maturity: str) -> None:
+    meta = plugin_repo / "python/fakeplug/plugin.toml"
+    meta.write_text(meta.read_text().replace('maturity = "pre-release"', f'maturity = "{maturity}"'))
+    assert any("plugin.toml maturity must be one of" in x for x in run(plugin_repo))
 
 
 def test_no_secrets_or_owners_in_plugin_toml(plugin_repo: Path) -> None:

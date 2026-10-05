@@ -6,7 +6,7 @@ language = "python"
 coordinate = "temporalio-google-genai"
 registry = "pypi"
 root-api = "temporalio.google_genai"
-maturity = "preview"
+maturity = "public-preview"
 docs = "https://docs.temporal.io/develop/python/integrations/google-genai"
 
 [release]

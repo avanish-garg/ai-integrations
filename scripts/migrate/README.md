@@ -25,7 +25,7 @@ Then add the files the import does not bring, as **separate commits on top of th
 (never amend the merge and never edit an imported file in the same PR):
 
 ```bash
-python3 scripts/new_python_plugin.py openai_agents --existing --maturity ga \
+python3 scripts/new_python_plugin.py openai_agents --existing --maturity generally-available \
   --upstream temporalio/sdk-python:temporalio/contrib/openai_agents \
   --description "Temporal integration for the OpenAI Agents SDK"
 ```

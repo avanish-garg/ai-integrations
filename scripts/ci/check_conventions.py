@@ -36,9 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import LANGUAGES, Plugin, discover_plugins, load_toml, repo_root  # noqa: E402
 
 MATURITY_CLASSIFIER = {
-    "ga": "Development Status :: 5 - Production/Stable",
-    "preview": "Development Status :: 4 - Beta",
-    "experimental": "Development Status :: 3 - Alpha",
+    "generally-available": "Development Status :: 5 - Production/Stable",
+    "public-preview": "Development Status :: 4 - Beta",
+    "pre-release": "Development Status :: 3 - Alpha",
 }
 REGISTRIES = {"python": "pypi", "typescript": "npm", "java": "maven", "go": "goproxy"}
 LANGUAGE_LOCKFILES = ("uv.lock", "pnpm-lock.yaml", "package-lock.json", "yarn.lock", "go.sum", "gradle.lockfile")
