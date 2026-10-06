@@ -4,10 +4,16 @@ Plugins that connect AI agent frameworks and SDKs to [Temporal](https://temporal
 execution. Each plugin is its own package with its own dependencies, tests, version and release
 cadence, laid out as `<language>/<integration>/`.
 
-| Plugin | Package | Root API | Maturity |
+| Plugin | Package | Root API | Release stage |
 |---|---|---|---|
-| [`python/mcp`](python/mcp) | [`temporalio-mcp`](https://pypi.org/project/temporalio-mcp/) | `temporalio.mcp` | Experimental |
-| [`python/openai_agents`](python/openai_agents) | [`temporalio-openai-agents`](https://pypi.org/project/temporalio-openai-agents/) | `temporalio.openai_agents` | GA |
+| [`python/deepagents`](python/deepagents) | `temporalio-deepagents` | `temporalio.deepagents` | [Pre-release](https://docs.temporal.io/develop/python/integrations/deepagents) |
+| [`python/google_adk`](python/google_adk) | `temporalio-google-adk` | `temporalio.google_adk` | [Pre-release](https://docs.temporal.io/develop/python/integrations/google-adk) |
+| [`python/google_genai`](python/google_genai) | `temporalio-google-genai` | `temporalio.google_genai` | [Public Preview](https://docs.temporal.io/develop/python/integrations/google-genai) |
+| [`python/langgraph`](python/langgraph) | `temporalio-langgraph` | `temporalio.langgraph` | [Public Preview](https://docs.temporal.io/develop/python/integrations/langgraph) |
+| [`python/langsmith`](python/langsmith) | `temporalio-langsmith` | `temporalio.langsmith` | [Public Preview](https://docs.temporal.io/develop/python/integrations/langsmith) |
+| [`python/mcp`](python/mcp) | [`temporalio-mcp`](https://pypi.org/project/temporalio-mcp/) | `temporalio.mcp` | [Pre-release](https://github.com/temporalio/ai-integrations/blob/main/python/mcp/README.md) |
+| [`python/openai_agents`](python/openai_agents) | [`temporalio-openai-agents`](https://pypi.org/project/temporalio-openai-agents/) | `temporalio.openai_agents` | [Generally Available](https://temporal.io/blog/announcing-openai-agents-sdk-integration) |
+| [`python/strands_agents`](python/strands_agents) | `temporalio-strands-agents` | `temporalio.strands_agents` | [Public Preview](https://docs.temporal.io/develop/python/integrations/strands-agents) |
 
 More plugins are migrating here from the SDK repositories; see the target table in
 [`AGENTS.md`](AGENTS.md).
