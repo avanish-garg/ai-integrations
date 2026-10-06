@@ -32,26 +32,38 @@ def test_parse_tag_invalid(tag: str) -> None:
         release_tool.parse_tag(tag)
 
 
-def test_policy_first_release() -> None:
-    release_tool.check_policy(Version("1.0.0"), "ga", [])
-    release_tool.check_policy(Version("1.0.0rc1"), "ga", [])
-    release_tool.check_policy(Version("0.1.0"), "experimental", [])
-    release_tool.check_policy(Version("0.1.0a1"), "preview", [])
-    for v, m in [("0.1.0", "ga"), ("1.0.0", "experimental"), ("1.1.0", "ga"), ("1.0.0.post1", "ga"), ("2.0.0", "ga")]:
+@pytest.mark.parametrize("maturity,first", [
+    ("generally-available", "1.0.0"),
+    ("public-preview", "0.1.0"),
+    ("pre-release", "0.1.0"),
+])
+def test_policy_first_release(maturity: str, first: str) -> None:
+    release_tool.check_policy(Version(first), maturity, [])
+    release_tool.check_policy(Version(first + "rc1"), maturity, [])
+    release_tool.check_policy(Version(first + "a1"), maturity, [])
+    for version in ("0.1.0", "1.0.0", "1.1.0", first + ".post1", "2.0.0"):
+        if version == first:
+            continue
         with pytest.raises(release_tool.PolicyError):
-            release_tool.check_policy(Version(v), m, [])
+            release_tool.check_policy(Version(version), maturity, [])
+
+
+@pytest.mark.parametrize("maturity", ["experimental", "preview", "ga"])
+def test_policy_rejects_legacy_maturity(maturity: str) -> None:
+    with pytest.raises(release_tool.PolicyError, match="unknown maturity"):
+        release_tool.check_policy(Version("0.1.0"), maturity, [])
 
 
 def test_policy_existing_coordinate_moves_forward() -> None:
     published = [Version("1.0.0"), Version("1.1.0"), Version("0.9.0")]
-    assert release_tool.check_policy(Version("1.1.1"), "ga", published) is None
-    assert release_tool.check_policy(Version("1.2.0rc1"), "ga", published) is None
-    assert release_tool.check_policy(Version("2.0.0"), "experimental", published) is None  # existing coordinates: no major rule
+    assert release_tool.check_policy(Version("1.1.1"), "generally-available", published) is None
+    assert release_tool.check_policy(Version("1.2.0rc1"), "generally-available", published) is None
+    assert release_tool.check_policy(Version("2.0.0"), "pre-release", published) is None  # existing coordinates: no major rule
     # The newest published version is a re-run of its own release (a failure after the PyPI upload), not a violation.
-    assert "re-run" in (release_tool.check_policy(Version("1.1.0"), "ga", published) or "")
+    assert "re-run" in (release_tool.check_policy(Version("1.1.0"), "generally-available", published) or "")
     for v in ("1.0.5", "0.9.1", "1.1.0rc1"):
         with pytest.raises(release_tool.PolicyError):
-            release_tool.check_policy(Version(v), "ga", published)
+            release_tool.check_policy(Version(v), "generally-available", published)
 
 
 def test_testpypi_policy_moves_forward_and_allows_newest_rerun() -> None:
