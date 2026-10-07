@@ -103,7 +103,7 @@ overall maturity (for example, OpenAI Agents is Generally Available with preview
   dependency locks is intentional: `./gradlew resolveAndLockAll --write-locks`.
 - Nightly and `latest-deps=true` runs use `-PdependencyMode=latest`, selecting stable
   releases within the plugin's declared dependency families and each configured
-  Spring Boot minor series. Run `resolveAndLockAll --write-locks --refresh-dependencies`
+  Spring Boot major series. Run `resolveAndLockAll --write-locks --refresh-dependencies`
   first; subsequent test and build commands reuse a separate ignored latest lock.
   Ordinary CI and releases default to `-PdependencyMode=locked` and committed locks.
 

@@ -9,10 +9,10 @@ def latestDependencies = providers.gradleProperty('dependencyMode').getOrElse('l
 ext {
     javaRelease = 17
     temporalVersion = latestDependencies ? '1.+' : '1.40.0'
-    springAiVersion = latestDependencies ? '1.1.+' : '1.1.0'
+    springAiVersion = latestDependencies ? '1.+' : '1.1.0'
     springBootVersion = providers.gradleProperty('springBootVersion').getOrElse('3.5.12')
     if (latestDependencies) {
-        springBootVersion = springBootVersion.tokenize('.').take(2).join('.') + '.+'
+        springBootVersion = springBootVersion.tokenize('.')[0] + '.+'
     }
     latestDependencyGroups = ['io.temporal', 'org.springframework.ai', 'org.springframework.boot']
 }

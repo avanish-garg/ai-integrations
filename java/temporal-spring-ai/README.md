@@ -22,7 +22,7 @@ a lock, run `./gradlew resolveAndLockAll --write-locks` (with
 `-PspringBootVersion=<version>` for a compatibility lane).
 
 Nightly CI and manual runs with `latest-deps=true` test stable releases in Temporal
-1.x, Spring AI 1.1.x, and the configured Spring Boot minor series (currently 3.5.x).
+1.x, Spring AI 1.x, and Spring Boot 3.x.
 To run that check locally:
 
 ```bash
