@@ -5,11 +5,16 @@ plugins {
 }
 
 description = 'Temporal Spring AI integration (Public Preview)'
+def latestDependencies = providers.gradleProperty('dependencyMode').getOrElse('locked') == 'latest'
 ext {
     javaRelease = 17
-    temporalVersion = '1.40.0'
-    springAiVersion = '1.1.0'
+    temporalVersion = latestDependencies ? '1.+' : '1.40.0'
+    springAiVersion = latestDependencies ? '1.1.+' : '1.1.0'
     springBootVersion = providers.gradleProperty('springBootVersion').getOrElse('3.5.12')
+    if (latestDependencies) {
+        springBootVersion = springBootVersion.tokenize('.').take(2).join('.') + '.+'
+    }
+    latestDependencyGroups = ['io.temporal', 'org.springframework.ai', 'org.springframework.boot']
 }
 
 apply from: '../_shared/java.gradle'

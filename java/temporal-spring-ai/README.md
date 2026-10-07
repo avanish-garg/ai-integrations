@@ -21,6 +21,18 @@ Dependencies are locked per supported Spring Boot version. To deliberately updat
 a lock, run `./gradlew resolveAndLockAll --write-locks` (with
 `-PspringBootVersion=<version>` for a compatibility lane).
 
+Nightly CI and manual runs with `latest-deps=true` test stable releases in Temporal
+1.x, Spring AI 1.1.x, and the configured Spring Boot minor series (currently 3.5.x).
+To run that check locally:
+
+```bash
+./gradlew -PdependencyMode=latest resolveAndLockAll --write-locks --refresh-dependencies
+./gradlew -PdependencyMode=latest spotlessCheck test stageDist
+```
+
+Latest mode writes a separate ignored lockfile and reuses its selected versions
+through testing and building. Ordinary CI and releases use the committed locks.
+
 Committed development builds use `0.0.0`. CI supplies `-PreleaseVersion=<version>`
 from an immutable release tag before testing and building; do not commit release
 version bumps. No `0.0.0` artifacts are published.

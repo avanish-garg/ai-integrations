@@ -168,3 +168,25 @@ def test_java_matrix_runs_before_artifact_upload() -> None:
     assert build['if'] == upload['if'] == 'matrix.dist'
     assert 'check_java_dist.py' in build['run'] and 'smoke_java.py' in build['run']
     assert steps.index(test) < steps.index(build) < steps.index(upload)
+
+
+def test_java_latest_dependencies_are_selected_and_locked_before_testing() -> None:
+    ci = yaml.safe_load((REPO / '.github/workflows/ci.yml').read_text())
+    mode = ci['jobs']['java']['with']['deps']
+    assert mode == ci['jobs']['python']['with']['deps']
+    assert "github.event_name == 'schedule'" in mode
+    assert "github.event_name == 'workflow_dispatch' && inputs.latest-deps" in mode
+    doc = yaml.safe_load((REPO / '.github/workflows/_java-plugin.yml').read_text())
+    assert doc[True]['workflow_call']['inputs']['deps']['default'] == 'locked'
+    assert doc['jobs']['test']['env']['DEPS'] == '${{ inputs.deps }}'
+    steps = doc['jobs']['test']['steps']
+    resolve = next(s for s in steps if s.get('name') == 'Resolve latest dependencies')
+    test = next(s for s in steps if s.get('name') == 'Lint and test')
+    build = next(s for s in steps if s.get('name') == 'Build and verify tested distributions')
+    assert resolve['if'] == "inputs.deps == 'latest'"
+    assert 'resolveAndLockAll --write-locks --refresh-dependencies' in resolve['run']
+    for step in (resolve, test, build):
+        assert '-PdependencyMode=$DEPS' in step['run']
+        assert '-PspringBootVersion=$SPRING_BOOT_VERSION' in step['run']
+    assert '--write-locks' not in test['run'] + build['run']
+    assert steps.index(resolve) < steps.index(test) < steps.index(build)

@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       latest-deps:
-        description: Re-resolve the newest allowed dependencies (uv lock --upgrade) before testing
+        description: Re-resolve the newest supported dependencies before testing
         type: boolean
         default: false
 
@@ -109,6 +109,7 @@ jobs:
     uses: ./.github/workflows/_java-plugin.yml
     with:
       plugin: ${{ matrix.plugin }}
+      deps: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.latest-deps)) && 'latest' || 'locked' }}
 
   nightly-report:
     name: Nightly report
