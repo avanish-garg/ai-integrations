@@ -16,9 +16,9 @@ import re
 import subprocess
 import sys
 
-# Job names come from ci.yml (`name: Python`) joined with the reusable workflow's
+# Job names come from ci.yml (`name: Python` and `name: Java`) joined with the reusable workflow's
 # job name; test_nightly_report.py asserts the two stay in step.
-JOB_RE = re.compile(r"^Python \((?P<plugin>[^)]+)\) / ")
+JOB_RE = re.compile(r"^(?:Python|Java) \((?P<plugin>[^)]+)\) / ")
 LABEL = "nightly"
 FAILED = {"failure", "timed_out"}
 

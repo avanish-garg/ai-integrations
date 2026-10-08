@@ -50,9 +50,11 @@ def test_ci_status_is_the_fan_in() -> None:
     doc = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())
     status = doc["jobs"]["ci-status"]
     assert status["if"] == "always()"
-    assert set(status["needs"]) == {"changes", "conventions", "python"}
+    assert set(status["needs"]) == {"changes", "conventions", "python", "java"}
     assert doc["jobs"]["python"]["uses"] == "./.github/workflows/_python-plugin.yml"
     assert "needs.changes.result == 'success'" in doc["jobs"]["python"]["if"]
+    assert doc["jobs"]["java"]["uses"] == "./.github/workflows/_java-plugin.yml"
+    assert "needs.changes.result == 'success'" in doc["jobs"]["java"]["if"]
 
 
 def test_release_publish_jobs_are_inline_and_oidc_only() -> None:
@@ -225,3 +227,39 @@ def test_top_level_permissions_are_empty_or_read_only() -> None:
         perms = doc.get("permissions")
         assert perms is not None, f"{path.name} must declare top-level permissions"
         assert all(v == "read" for v in perms.values()) or perms == {} or path.name == "opengrep.yml", path.name
+
+
+def test_java_matrix_runs_before_artifact_upload() -> None:
+    doc = yaml.safe_load((REPO / '.github/workflows/_java-plugin.yml').read_text())
+    steps = doc['jobs']['test']['steps']
+    test = next(s for s in steps if s.get('name') == 'Lint and test')
+    build = next(s for s in steps if s.get('name') == 'Build and verify tested distributions')
+    upload = next(s for s in steps if s.get('name') == 'Upload tested distributions')
+    assert 'spotlessCheck test' in test['run'] and 'spotlessApply' not in test['run']
+    assert '-PreleaseVersion=$RELEASE_VERSION' in test['run']
+    assert '-PspringBootVersion=$SPRING_BOOT_VERSION' in test['run']
+    assert build['if'] == upload['if'] == 'matrix.dist'
+    assert 'check_java_dist.py' in build['run'] and 'smoke_java.py' in build['run']
+    assert steps.index(test) < steps.index(build) < steps.index(upload)
+
+
+def test_java_latest_dependencies_are_selected_and_locked_before_testing() -> None:
+    ci = yaml.safe_load((REPO / '.github/workflows/ci.yml').read_text())
+    mode = ci['jobs']['java']['with']['deps']
+    assert mode == ci['jobs']['python']['with']['deps']
+    assert "github.event_name == 'schedule'" in mode
+    assert "github.event_name == 'workflow_dispatch' && inputs.latest-deps" in mode
+    doc = yaml.safe_load((REPO / '.github/workflows/_java-plugin.yml').read_text())
+    assert doc[True]['workflow_call']['inputs']['deps']['default'] == 'locked'
+    assert doc['jobs']['test']['env']['DEPS'] == '${{ inputs.deps }}'
+    steps = doc['jobs']['test']['steps']
+    resolve = next(s for s in steps if s.get('name') == 'Resolve latest dependencies')
+    test = next(s for s in steps if s.get('name') == 'Lint and test')
+    build = next(s for s in steps if s.get('name') == 'Build and verify tested distributions')
+    assert resolve['if'] == "inputs.deps == 'latest'"
+    assert 'resolveAndLockAll --write-locks --refresh-dependencies' in resolve['run']
+    for step in (resolve, test, build):
+        assert '-PdependencyMode=$DEPS' in step['run']
+        assert '-PspringBootVersion=$SPRING_BOOT_VERSION' in step['run']
+    assert '--write-locks' not in test['run'] + build['run']
+    assert steps.index(resolve) < steps.index(test) < steps.index(build)

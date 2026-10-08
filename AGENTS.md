@@ -41,7 +41,7 @@ resources (`python/_shared/`, `python/_template/`) and are ignored by CI discove
 | `typescript/langsmith` | `@temporalio/langsmith` | continues (1.24.0 next) | Public Preview | `@temporalio/langsmith` |
 | `typescript/openai-agents` | `@temporalio/openai-agents` | continues (1.24.0 next) | Generally Available | `@temporalio/openai-agents` |
 | `typescript/strands-agents` | `@temporalio/strands-agents` | continues (1.24.0 next) | Pre-release | `@temporalio/strands-agents` |
-| `java/temporal-spring-ai` | `io.temporal:temporal-spring-ai` | continues (1.39.0 next) | Public Preview | `io.temporal.springai` |
+| `java/spring-ai` | `io.temporal:spring-ai` | 0.1.0 (0.1.0-RC1 planned) | Public Preview | `io.temporal.springai` |
 | `go/googleadk` | `go.temporal.io/sdk/contrib/googleadk` | continues (v0.3.0 next) | Public Preview | `googleadk` |
 
 "First version here" values are informational; the registry is the source of truth for the
@@ -87,15 +87,35 @@ overall maturity (for example, OpenAI Agents is Generally Available with preview
 - Tests self-provision the Temporal dev server (`WorkflowEnvironment.start_local`, version pinned in `tests/__init__.py`) with its default configuration; add a `--dynamic-config-value` flag in a plugin's conftest only when one of its tests needs a server feature that is off by default. Bind those options in a startup callback passed to `tests/helpers/environment.py`'s `start_local_with_retry`. This plugin-agnostic policy allows three startup attempts with a one-second delay for the SDK's explicit startup-deadline message; other errors and cancellation propagate immediately.
 - Test scaffolding: each plugin owns its provenance guard, local dev-server fixtures and pytest hooks. New plugins copy the standard implementations from `python/_template/tests/`; the conventions check keeps `environment.py`, `plugin_meta.py`, `provenance.py`, `test_env.py`, and `test_installed_matches_source.py` byte-identical to their canonical templates. Plugin-specific fixtures stay in that plugin's conftest. Tests must not require real provider credentials; use deterministic local models, mock transports, or in-process servers to exercise provider behavior in CI.
 
+## Java conventions
+
+- Each Java plugin owns a Gradle wrapper with distribution checksum, `build.gradle`,
+  `settings.gradle`, `plugin.toml`, and per-Spring-Boot dependency locks. Shared build
+  conventions live in `java/_shared/java.gradle`.
+- Java development versions are `0.0.0`; a release tag supplies `-PreleaseVersion`
+  before tests and builds. Do not publish the placeholder or add snapshot automation.
+- Java packages and publication metadata use the root MIT license. Imported source
+  and tests stay unchanged until active upstream metadata is removed at ownership handoff.
+- CI uses metadata to test Ubuntu on Java 17/25 and macOS/Windows on Java 25.
+  All compatibility variants run on PRs. The primary Ubuntu/max variant alone
+  produces the tested Maven distributions and runs a clean consumer smoke test.
+- `./gradlew spotlessCheck test stageDist` checks without rewriting source. Updating
+  dependency locks is intentional: `./gradlew resolveAndLockAll --write-locks`.
+- Nightly and `latest-deps=true` runs use `-PdependencyMode=latest`, selecting stable
+  releases within the plugin's declared dependency families and each configured
+  Spring Boot major series. Run `resolveAndLockAll --write-locks --refresh-dependencies`
+  first; subsequent test and build commands reuse a separate ignored latest lock.
+  Ordinary CI and releases default to `-PdependencyMode=locked` and committed locks.
+
 ## CI
 
 One entry workflow, one reusable workflow per language, plugin as a parameter, no secrets.
 
-- `.github/workflows/ci.yml` (`pull_request`, `merge_group`, push to `main`, nightly, dispatch). Job `changes` runs `scripts/ci/detect_changes.py`: plugins are discovered from `<language>/*/<manifest>` (ignoring `_*`); a changed file under a plugin selects that plugin; a non-plugin file under a language root selects every plugin of that language; `.github/**` and `scripts/ci/**` select everything; `scripts/release/**` and `scripts/migrate/**` select only the script tests; push to `main`, nightly and dispatch select everything. Job `conventions` checks repository invariants and runs the script tests. Job `python` calls `_python-plugin.yml` once per selected plugin. Job `ci-status` fans in and is the only required check (skipped upstream jobs count as success).
+- `.github/workflows/ci.yml` (`pull_request`, `merge_group`, push to `main`, nightly, dispatch). Job `changes` runs `scripts/ci/detect_changes.py`: plugins are discovered from `<language>/*/<manifest>` (ignoring `_*`); a changed file under a plugin selects that plugin; a non-plugin file under a language root selects every plugin of that language; `.github/**` and `scripts/ci/**` select everything; `scripts/release/**` and `scripts/migrate/**` select only the script tests; push to `main`, nightly and dispatch select everything. Job `conventions` checks repository invariants and runs the script tests. Job `python` calls `_python-plugin.yml` once per selected plugin. Job `java` calls `_java-plugin.yml` for selected Java plugins. Job `ci-status` fans in and is the only required check (skipped upstream jobs count as success).
 - `.github/workflows/_python-plugin.yml`: job `matrix` reads `plugin.toml` `runtime-versions` and emits the same matrix for every run, pull requests included (ubuntu at the min and max versions, macOS and Windows at max); job `test` runs `make sync` (or `sync-latest` on nightly runs), `make lint`, `make test`, then, on the ubuntu/max cell only, the `python-build-check` composite action (`make build`, `check_wheel.py`, isolated `smoke.py` on wheel and sdist). Windows runners install GNU make with choco.
 - Dependencies: ordinary CI uses the committed lockfile; local `make sync` uses the existing lockfile. Nightly runs every plugin with the newest allowed dependencies (`sync-latest`) without committing the updated lock; manual dispatch can select that mode too. Shared lint, test and format targets use `uv run --locked` to preserve the dependency versions selected during sync.
 - Required checks on `main`: `ci-status`, `Check for CODEOWNERS` and `opengrep/scan` (the last two are org-enforced workflows that run automatically on every PR), plus one approving review from a code owner; `license/cla` joins once the CLA app is installed. Do not add a local opengrep caller; the org one already runs. TRANSITION(sdk-cutover): branch protection, the `testpypi`/`pypi` environments (tag policy `python/*/v*`) and the release-tag ruleset were configured by hand on 2026-09-09. The `pypi` required-reviewer gate was removed on 2026-10-07.
-- Nightly failures: `scripts/ci/nightly_report.py` opens or updates one `nightly` issue per failing plugin from the job names `Python (<plugin>) / ...`; `scripts/tests/test_nightly_report.py` fails if `ci.yml` renames those jobs.
+- Nightly failures: `scripts/ci/nightly_report.py` opens or updates one `nightly` issue per failing plugin from the job names `Python (<plugin>) / ...` and `Java (<plugin>) / ...`; `scripts/tests/test_nightly_report.py` fails if `ci.yml` renames those jobs.
 
 ## Releases
 
