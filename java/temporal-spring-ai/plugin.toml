@@ -12,7 +12,7 @@ upstream = "temporalio/sdk-java:contrib/temporal-spring-ai"
 allow-final = false
 
 [ci]
-runtime-versions = ["17", "21"]
+runtime-versions = ["17", "25"]
 spring-boot-versions = ["3.5.12"]
 
 [smoke]

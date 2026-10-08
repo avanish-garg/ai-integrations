@@ -7,6 +7,7 @@ Coordinate: `io.temporal:temporal-spring-ai`. The existing releases are hosted o
 [Maven Central](https://central.sonatype.com/artifact/io.temporal/temporal-spring-ai).
 This initial import retains Spring AI 1.1.0, Spring Boot 3.5.12, and Java 17+.
 Consumers supply the Temporal SDK and `temporal-spring-boot-starter` separately.
+CI tests Java 17 and 25; published bytecode targets Java 17.
 
 See the [imported usage guide](https://github.com/temporalio/ai-integrations/blob/main/java/temporal-spring-ai/_upstream/README.md).
 Imported source and tests remain upstream-owned until the ownership handoff.

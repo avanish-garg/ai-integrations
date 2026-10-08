@@ -96,7 +96,7 @@ overall maturity (for example, OpenAI Agents is Generally Available with preview
   before tests and builds. Do not publish the placeholder or add snapshot automation.
 - Java packages and publication metadata use the root MIT license. Imported source
   and tests stay unchanged until active upstream metadata is removed at ownership handoff.
-- CI uses metadata to test Ubuntu on Java 17/21 and macOS/Windows on Java 21.
+- CI uses metadata to test Ubuntu on Java 17/25 and macOS/Windows on Java 25.
   All compatibility variants run on PRs. The primary Ubuntu/max variant alone
   produces the tested Maven distributions and runs a clean consumer smoke test.
 - `./gradlew spotlessCheck test stageDist` checks without rewriting source. Updating
