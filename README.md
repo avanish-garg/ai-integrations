@@ -1,5 +1,6 @@
 # Temporal AI Integrations
 
+[![Java: 17 and 21](https://img.shields.io/badge/java-17%20%7C%2021-blue.svg)](https://dev.java/)
 [![Python: 3.10 through 3.14](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
