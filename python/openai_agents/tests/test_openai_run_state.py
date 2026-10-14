@@ -7,8 +7,11 @@ Temporal activities.
 """
 
 import asyncio
+import contextvars
+import gc
 import json
 import uuid
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 from typing import Any
@@ -56,6 +59,7 @@ from temporalio.openai_agents._model_parameters import ModelSummaryProvider
 from temporalio.openai_agents._temporal_model_provider import (
     _CaptureAgentFilter,  # pyright: ignore[reportPrivateUsage]
     _TemporalModelProvider,  # pyright: ignore[reportPrivateUsage]
+    capture_scope,
     install_model_provider,  # pyright: ignore[reportPrivateUsage]
 )
 from temporalio.openai_agents._temporal_model_stub import (
@@ -417,12 +421,106 @@ class AgentAndInstructions(ModelSummaryProvider):
         return f"{agent.name if agent else None}|{instructions}"
 
 
+@function_tool
+async def lookup() -> str:
+    """Look something up."""
+    return "found"
+
+
+@function_tool(failure_error_function=None)
+async def explode() -> str:
+    """Raise out of the run."""
+    raise ValueError("boom")
+
+
+@function_tool(failure_error_function=None)
+async def cancel_run() -> str:
+    """Cancel the run from inside a tool."""
+    raise asyncio.CancelledError
+
+
+def _multi_turn_reply(
+    instructions: str | None, input: str | list[TResponseInputItem]
+) -> ModelResponse:
+    """Call ``lookup`` first, then finish, or raise on the second turn as instructed."""
+    if _has_tool_output(input):
+        if instructions == "Fail on turn two.":
+            return ResponseBuilders.tool_call("{}", "explode", call_id="call-explode")
+        if instructions == "Cancel on turn two.":
+            return ResponseBuilders.tool_call("{}", "cancel_run", call_id="call-cancel")
+        return ResponseBuilders.output_message("done")
+    return ResponseBuilders.tool_call("{}", "lookup", call_id="call-lookup")
+
+
+_CAPTURE_VAR_NAME = "temporal_openai_agents_current_agent"
+
+_MODE_INSTRUCTIONS = {
+    "error": "Fail on turn two.",
+    "cancelled": "Cancel on turn two.",
+}
+
+
+async def _run_once(mode: str, agent: Agent[None], config: RunConfig) -> None:
+    if mode == "streamed_cancel":
+        result = Runner.run_streamed(agent, "Go.", run_config=config)
+        async for event in result.stream_events():
+            if event.type == "run_item_stream_event" and event.name == "tool_output":
+                result.cancel()
+    elif mode == "streamed":
+        result = Runner.run_streamed(agent, "Go.", run_config=config)
+        async for _ in result.stream_events():
+            pass
+    else:
+        await Runner.run(agent, "Go.", run_config=config)
+
+
+@workflow.defn
+class RepeatedRunsWorkflow:
+    """Run agents back to back in one workflow task, then inspect what its context retains."""
+
+    @workflow.init
+    def __init__(self, mode: str, runs: int) -> None:
+        self.stream = WorkflowStream()
+
+    @workflow.run
+    async def run(self, mode: str, runs: int) -> dict[str, int]:
+        agent_refs: list[weakref.ReferenceType[Agent[Any]]] = []
+
+        def record(data: CallModelData[Any]) -> ModelInputData:
+            agent_refs.append(weakref.ref(data.agent))
+            return data.model_data
+
+        config = RunConfig(call_model_input_filter=record)
+        failures = 0
+        for _ in range(runs):
+            agent = Agent[None](
+                name="Looker",
+                instructions=_MODE_INSTRUCTIONS.get(mode, "Look it up."),
+                tools=[lookup, explode, cancel_run],
+            )
+            try:
+                await _run_once(mode, agent, config)
+            except (Exception, asyncio.CancelledError):
+                failures += 1
+            del agent
+        gc.collect()
+        context = contextvars.copy_context()
+        return {
+            "failures": failures,
+            "model_calls": len(agent_refs),
+            "context_vars": sum(1 for var in context if var.name == _CAPTURE_VAR_NAME),
+            "context_agents": sum(isinstance(v, Agent) for v in context.values()),
+            "live_agents": sum(ref() is not None for ref in agent_refs),
+        }
+
+
 ALL_WORKFLOWS = [
     ResumeRunStateWorkflow,
     ResumeAcrossContinueAsNewWorkflow,
     ResumeWithInputFilterWorkflow,
     ConcurrentNestedResumeWorkflow,
     ConcurrentAgentToolsWorkflow,
+    RepeatedRunsWorkflow,
 ]
 
 
@@ -622,3 +720,62 @@ async def test_capture_filter_resolves_agent_lazily_and_is_installed_once():
     assert nested.model_provider is provider
     assert isinstance(nested.call_model_input_filter, _CaptureAgentFilter)
     assert nested.call_model_input_filter.wrapped is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "runs", "failures"),
+    [
+        ("run", 20, 0),
+        ("streamed", 20, 0),
+        ("error", 20, 20),
+        ("cancelled", 5, 5),
+        ("streamed_cancel", 5, 5),
+    ],
+)
+async def test_finished_runs_leave_no_agent_in_workflow_context(
+    client: Client, mode: str, runs: int, failures: int
+):
+    result, _ = await _execute(
+        client,
+        ScriptedModel(_multi_turn_reply),
+        RepeatedRunsWorkflow.run,
+        mode,
+        runs,
+    )
+    assert result["failures"] == failures
+    assert result["model_calls"] >= runs
+    retained = {k: result[k] for k in ("context_vars", "context_agents", "live_agents")}
+    assert retained == {"context_vars": 0, "context_agents": 0, "live_agents": 0}
+
+
+def test_capture_scope_restores_the_callers_context():
+    outer_agent, inner_agent = _make_banker(), _make_triage(False)
+    config = install_model_provider(ModelActivityParameters(), RunConfig())
+    provider = config.model_provider
+    assert isinstance(provider, _TemporalModelProvider)
+    stub = provider.get_model("gpt-4o")
+    assert isinstance(stub, _TemporalModelStub)
+    current_agent = stub._current_agent  # pyright: ignore[reportPrivateUsage]
+    assert current_agent is not None
+    assert config.call_model_input_filter is not None
+    capture = config.call_model_input_filter
+
+    def captured_vars() -> list[contextvars.ContextVar[Any]]:
+        return [
+            var for var in contextvars.copy_context() if var.name == _CAPTURE_VAR_NAME
+        ]
+
+    def check() -> None:
+        assert captured_vars() == []
+        with pytest.raises(RuntimeError):
+            with capture_scope():
+                capture(_call_data(outer_agent))
+                with capture_scope():
+                    assert current_agent() is None
+                    capture(_call_data(inner_agent))
+                    assert current_agent() is inner_agent
+                assert current_agent() is outer_agent
+                raise RuntimeError
+        assert captured_vars() == []
+
+    contextvars.Context().run(check)

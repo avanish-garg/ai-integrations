@@ -22,7 +22,10 @@ from typing_extensions import Unpack
 from temporalio import workflow
 from temporalio.openai_agents._errors import AgentsWorkflowError
 from temporalio.openai_agents._model_parameters import ModelActivityParameters
-from temporalio.openai_agents._temporal_model_provider import install_model_provider
+from temporalio.openai_agents._temporal_model_provider import (
+    capture_scope,
+    install_model_provider,
+)
 from temporalio.openai_agents._temporal_model_stub import _TemporalModelStub
 from temporalio.openai_agents.sandbox._temporal_sandbox_client import (
     TemporalSandboxClient,
@@ -246,23 +249,24 @@ class TemporalOpenAIRunner(AgentRunner):
 
         converted_agent = self._prepare_workflow_run(starting_agent, kwargs)
 
-        try:
-            return await self._runner.run(
-                starting_agent=converted_agent,
-                input=input,
-                **kwargs,
-            )
-        except AgentsException as e:
-            # In order for workflow failures to properly fail the workflow, we need to rewrap them in
-            # a Temporal error
-            if e.__cause__ and workflow.is_failure_exception(e.__cause__):
-                reraise = AgentsWorkflowError(
-                    f"Workflow failure exception in Agents Framework: {e}"
+        with capture_scope():
+            try:
+                return await self._runner.run(
+                    starting_agent=converted_agent,
+                    input=input,
+                    **kwargs,
                 )
-                reraise.__traceback__ = e.__traceback__
-                raise reraise from e.__cause__
-            else:
-                raise e
+            except AgentsException as e:
+                # In order for workflow failures to properly fail the workflow, we need to rewrap them in
+                # a Temporal error
+                if e.__cause__ and workflow.is_failure_exception(e.__cause__):
+                    reraise = AgentsWorkflowError(
+                        f"Workflow failure exception in Agents Framework: {e}"
+                    )
+                    reraise.__traceback__ = e.__traceback__
+                    raise reraise from e.__cause__
+                else:
+                    raise e
 
     def run_sync(
         self,
