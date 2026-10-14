@@ -503,6 +503,8 @@ class RepeatedRunsWorkflow:
             except (Exception, asyncio.CancelledError):
                 failures += 1
             del agent
+        # Let task cleanup callbacks release the final failed or cancelled run.
+        await asyncio.sleep(0)
         gc.collect()
         context = contextvars.copy_context()
         return {
