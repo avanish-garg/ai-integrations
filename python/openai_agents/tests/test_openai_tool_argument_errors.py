@@ -3,11 +3,14 @@
 Like a stock ``function_tool``, ``activity_as_tool`` and ``nexus_operation_as_tool`` return the
 argument error text to the model so that it can retry. The workflow must neither fail nor
 retry its workflow task forever, and the activity or operation must not run for bad arguments.
+With ``failure_error_function=None`` the workflow fails promptly instead.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -17,10 +20,12 @@ import pytest
 from agents import (
     Agent,
     ModelBehaviorError,
+    ModelResponse,
     RunContextWrapper,
     Runner,
     Tool,
     _debug,
+    default_tool_error_function,
     function_tool,
 )
 from agents.function_schema import function_schema
@@ -28,6 +33,7 @@ from agents.items import ToolCallOutputItem
 
 import temporalio.openai_agents as openai_agents
 from temporalio import activity, workflow
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 from temporalio.openai_agents import AgentsWorkflowError, ModelActivityParameters
@@ -204,7 +210,12 @@ async def _run_workflow(
             return await handle.result()
 
 
-ACTIVITIES = [forecast, forecast_at, forecast_everywhere, forecast_failure]
+ACTIVITIES: list[Callable[..., Any]] = [
+    forecast,
+    forecast_at,
+    forecast_everywhere,
+    forecast_failure,
+]
 
 DEFAULT_RUN_ERROR = "An error occurred while running the tool."
 
@@ -505,9 +516,270 @@ async def test_argument_error_text_matches_function_tool(
     assert await tool_output(temporal_tool) == expected
 
 
-async def test_tool_argument_error_without_formatter_raises():
+async def test_tool_argument_error_without_formatter_raises_application_error():
     schema = function_schema(forecast)
     with pytest.raises(ModelBehaviorError) as e:
         _parse_tool_arguments(schema, "{")
-    with pytest.raises(ModelBehaviorError):
+    with pytest.raises(ApplicationError) as raised:
         await _tool_argument_error(None, RunContextWrapper(None), e.value)
+    assert raised.value.type == "ModelBehaviorError"
+    assert raised.value.non_retryable
+    assert raised.value.message == str(e.value)
+    assert raised.value.__cause__ is e.value
+
+
+@dataclass
+class RunInfo:
+    token: str
+
+
+@workflow.defn
+class ToolArgumentModesWorkflow:
+    @workflow.run
+    async def run(self, kind: str, mode: str) -> list[str]:
+        run_info = RunInfo(token=workflow.info().workflow_id)
+
+        async def async_error(ctx: RunContextWrapper[Any], error: Exception) -> str:
+            await workflow.sleep(timedelta(milliseconds=10))
+            return (
+                f"ASYNC {type(error).__name__} token={ctx.context.token} "
+                f"wrapper={isinstance(ctx, RunContextWrapper)} "
+                f"same_context={ctx.context is run_info}"
+            )
+
+        failure_error_function: Any = {
+            "default": default_tool_error_function,
+            "none": None,
+            "async": async_error,
+        }[mode]
+        tool: Tool
+        if kind == "activity":
+            tool = openai_agents.workflow.activity_as_tool(
+                forecast,
+                start_to_close_timeout=timedelta(seconds=10),
+                failure_error_function=failure_error_function,
+            )
+        else:
+            tool = openai_agents.workflow.nexus_operation_as_tool(
+                ForecastService.forecast_operation,
+                service=ForecastService,
+                endpoint=make_nexus_endpoint_name(workflow.info().task_queue),
+                schedule_to_close_timeout=timedelta(seconds=10),
+                failure_error_function=failure_error_function,
+            )
+        result = await Runner.run(
+            Agent[RunInfo](name="Weather", instructions="Be helpful.", tools=[tool]),
+            "What is the weather?",
+            context=run_info,
+        )
+        outputs = [
+            str(item.output)
+            for item in result.new_items
+            if isinstance(item, ToolCallOutputItem)
+        ]
+        return outputs + [str(result.final_output)]
+
+
+class RecordingModel(TestModel):
+    """Scripted model that records the input of every turn."""
+
+    def __init__(self, responses: list[ModelResponse]) -> None:
+        responses_iter = iter(responses)
+        super().__init__(lambda: next(responses_iter))
+        self.inputs: list[str] = []
+
+    async def get_response(  # type: ignore[override]
+        self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
+    ) -> ModelResponse:
+        self.inputs.append(json.dumps(input, default=str))
+        return await super().get_response(system_instructions, input, *args, **kwargs)
+
+
+@dataclass
+class ToolCase:
+    tool_name: str
+    missing_argument: str
+    malformed_json: str
+    valid: str
+    expected_output: str
+    expected_call: str
+
+
+TOOL_CASES = {
+    "activity": ToolCase(
+        tool_name="forecast",
+        missing_argument='{"city": "Tokyo"}',
+        malformed_json='{"city": "Tokyo", "days": 3',
+        valid='{"city": "Tokyo", "days": 3}',
+        expected_output="Sunny in Tokyo for 3 days",
+        expected_call="forecast:Tokyo:3",
+    ),
+    "nexus": ToolCase(
+        tool_name="forecast_operation",
+        missing_argument='{"input": {"country": "Japan"}}',
+        malformed_json='{"input": {"city": "Tokyo"',
+        valid='{"input": {"city": "Tokyo"}}',
+        expected_output="Sunny in Tokyo, Japan",
+        expected_call="Tokyo",
+    ),
+}
+
+TOOL_KINDS = [
+    pytest.param("activity", id="activity"),
+    pytest.param("nexus", id="nexus", marks=pytest.mark.requires_local_server),
+]
+
+
+@dataclass
+class ModeRun:
+    result: list[str] | WorkflowFailureError
+    event_types: list[EventType.ValueType]
+    model: RecordingModel
+    workflow_id: str
+    calls: list[str]
+
+
+async def _run_mode(
+    client: Client,
+    env: WorkflowEnvironment,
+    kind: str,
+    mode: str,
+    responses: list[ModelResponse],
+) -> ModeRun:
+    if kind == "nexus" and env.supports_time_skipping:
+        pytest.skip("Nexus tests don't work with time-skipping server")
+    calls = ACTIVITY_CALLS if kind == "activity" else OPERATION_CALLS
+    calls.clear()
+    model = RecordingModel(responses)
+    async with AgentEnvironment(
+        model=model,
+        model_params=ModelActivityParameters(
+            start_to_close_timeout=timedelta(seconds=30),
+        ),
+    ) as agent_env:
+        client = agent_env.applied_on_client(client)
+        async with new_worker(
+            client,
+            ToolArgumentModesWorkflow,
+            activities=ACTIVITIES,
+            nexus_service_handlers=[ForecastServiceHandler()],
+        ) as worker:
+            if kind == "nexus":
+                await env.create_nexus_endpoint(
+                    make_nexus_endpoint_name(worker.task_queue), worker.task_queue
+                )
+            handle = await client.start_workflow(
+                ToolArgumentModesWorkflow.run,
+                args=[kind, mode],
+                id=f"tool-argument-modes-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+                execution_timeout=timedelta(seconds=15),
+            )
+            result: list[str] | WorkflowFailureError
+            try:
+                result = await handle.result()
+            except WorkflowFailureError as e:
+                result = e
+            history = await handle.fetch_history()
+            return ModeRun(
+                result=result,
+                event_types=[event.event_type for event in history.events],
+                model=model,
+                workflow_id=handle.id,
+                calls=list(calls),
+            )
+
+
+@pytest.mark.parametrize("kind", TOOL_KINDS)
+async def test_corrected_tool_call_runs_after_invalid_one(
+    client: Client, env: WorkflowEnvironment, kind: str
+):
+    case = TOOL_CASES[kind]
+    run = await _run_mode(
+        client,
+        env,
+        kind,
+        "default",
+        [
+            ResponseBuilders.tool_call(
+                case.missing_argument, case.tool_name, call_id="call-1"
+            ),
+            ResponseBuilders.tool_call(case.valid, case.tool_name, call_id="call-2"),
+            ResponseBuilders.output_message("done"),
+        ],
+    )
+    assert isinstance(run.result, list)
+    error_output, tool_output, final = run.result
+    assert DEFAULT_RUN_ERROR in error_output
+    assert tool_output == case.expected_output
+    assert final == "done"
+    assert run.calls == [case.expected_call]
+    assert len(run.model.inputs) == 3
+    assert DEFAULT_RUN_ERROR in run.model.inputs[1]
+    assert case.expected_output in run.model.inputs[2]
+    assert EventType.EVENT_TYPE_WORKFLOW_TASK_FAILED not in run.event_types
+    assert EventType.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED in run.event_types
+
+
+@pytest.mark.parametrize("kind", TOOL_KINDS)
+@pytest.mark.parametrize("bad_arguments", ["missing_argument", "malformed_json"])
+async def test_no_failure_error_function_fails_workflow(
+    client: Client, env: WorkflowEnvironment, kind: str, bad_arguments: str
+):
+    case = TOOL_CASES[kind]
+    run = await _run_mode(
+        client,
+        env,
+        kind,
+        "none",
+        [
+            ResponseBuilders.tool_call(
+                getattr(case, bad_arguments), case.tool_name, call_id="call-1"
+            ),
+            ResponseBuilders.output_message("unreachable"),
+        ],
+    )
+    assert isinstance(run.result, WorkflowFailureError)
+    agents_error = run.result.cause
+    assert isinstance(agents_error, ApplicationError)
+    assert agents_error.type == AgentsWorkflowError.__name__
+    assert f"Invalid JSON input for tool {case.tool_name}" in agents_error.message
+    argument_error = agents_error.cause
+    assert isinstance(argument_error, ApplicationError)
+    assert argument_error.type == "ModelBehaviorError"
+    assert argument_error.non_retryable
+    assert argument_error.message == f"Invalid JSON input for tool {case.tool_name}"
+    assert run.calls == []
+    assert len(run.model.inputs) == 1
+    assert EventType.EVENT_TYPE_WORKFLOW_TASK_FAILED not in run.event_types
+    assert EventType.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED in run.event_types
+    assert EventType.EVENT_TYPE_WORKFLOW_EXECUTION_TIMED_OUT not in run.event_types
+
+
+@pytest.mark.parametrize("kind", TOOL_KINDS)
+async def test_async_failure_error_function_output_reaches_model(
+    client: Client, env: WorkflowEnvironment, kind: str
+):
+    case = TOOL_CASES[kind]
+    run = await _run_mode(
+        client,
+        env,
+        kind,
+        "async",
+        [
+            ResponseBuilders.tool_call(
+                case.missing_argument, case.tool_name, call_id="call-1"
+            ),
+            ResponseBuilders.output_message("recovered"),
+        ],
+    )
+    assert isinstance(run.result, list)
+    expected = (
+        f"ASYNC ModelBehaviorError token={run.workflow_id} "
+        "wrapper=True same_context=True"
+    )
+    assert run.result == [expected, "recovered"]
+    assert len(run.model.inputs) == 2
+    assert expected in run.model.inputs[1]
+    assert run.calls == []
+    assert EventType.EVENT_TYPE_WORKFLOW_TASK_FAILED not in run.event_types
