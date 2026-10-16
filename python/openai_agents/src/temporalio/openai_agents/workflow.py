@@ -86,10 +86,14 @@ async def _tool_argument_error(
     """Format an argument error as the tool output returned to the model.
 
     Raises:
-        ModelBehaviorError: If ``failure_error_function`` is None.
+        ApplicationError: Non-retryable, if ``failure_error_function`` is None.
+            Unlike ``ModelBehaviorError``, it fails the workflow instead of
+            retrying the workflow task.
     """
     if failure_error_function is None:
-        raise error
+        raise ApplicationError(
+            str(error), type="ModelBehaviorError", non_retryable=True
+        ) from error
     result = failure_error_function(ctx, error)
     if inspect.isawaitable(result):
         result = await result
@@ -130,9 +134,10 @@ def activity_as_tool(
         failure_error_function: Formats the error text returned to the model
             when its arguments are not valid JSON or do not match the tool's
             parameters, so that it can retry. Defaults to the Agents SDK's
-            ``default_tool_error_function``. If None, the error is raised
-            instead. Errors raised by the activity itself are not handled by
-            this function.
+            ``default_tool_error_function``. If None, the workflow fails with a
+            non-retryable ``ApplicationError`` of type ``ModelBehaviorError``.
+            Errors raised by the activity itself are not handled by this
+            function.
 
     Returns:
         An OpenAI agent tool that wraps the provided activity.
@@ -248,9 +253,10 @@ def nexus_operation_as_tool(
         failure_error_function: Formats the error text returned to the model
             when its arguments are not valid JSON or do not match the
             operation's input, so that it can retry. Defaults to the Agents
-            SDK's ``default_tool_error_function``. If None, the error is
-            raised instead. Errors raised by the operation itself are not
-            handled by this function.
+            SDK's ``default_tool_error_function``. If None, the workflow fails
+            with a non-retryable ``ApplicationError`` of type
+            ``ModelBehaviorError``. Errors raised by the operation itself are
+            not handled by this function.
 
     Returns:
         An OpenAI agent tool that wraps the provided operation.
