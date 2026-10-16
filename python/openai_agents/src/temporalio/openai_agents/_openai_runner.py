@@ -20,7 +20,11 @@ from agents.sandbox import SandboxAgent
 from typing_extensions import Unpack
 
 from temporalio import workflow
-from temporalio.openai_agents._errors import AgentsWorkflowError
+from temporalio.exceptions import ApplicationError
+from temporalio.openai_agents._errors import (
+    AgentsWorkflowError,
+    NonRetryableAgentsWorkflowError,
+)
 from temporalio.openai_agents._model_parameters import ModelActivityParameters
 from temporalio.openai_agents._temporal_model_provider import (
     capture_scope,
@@ -259,14 +263,8 @@ class TemporalOpenAIRunner(AgentRunner):
             except AgentsException as e:
                 # In order for workflow failures to properly fail the workflow, we need to rewrap them in
                 # a Temporal error
-                if e.__cause__ and workflow.is_failure_exception(e.__cause__):
-                    reraise = AgentsWorkflowError(
-                        f"Workflow failure exception in Agents Framework: {e}"
-                    )
-                    reraise.__traceback__ = e.__traceback__
-                    raise reraise from e.__cause__
-                else:
-                    raise e
+                _reraise_workflow_failure(e)
+                raise e
 
     def run_sync(
         self,
@@ -378,11 +376,16 @@ def _reraise_workflow_failure(e: AgentsException) -> None:
     """Rewrap an AgentsException whose cause is a Temporal workflow failure.
 
     Returns normally when ``e`` is not workflow-failure-bearing so the
-    caller can re-raise the original.
+    caller can re-raise the original. The error is non-retryable when the
+    cause is a non-retryable ``ApplicationError``, so a Workflow retry policy
+    does not rerun the whole agent run for it.
     """
     if e.__cause__ and workflow.is_failure_exception(e.__cause__):
-        reraise = AgentsWorkflowError(
-            f"Workflow failure exception in Agents Framework: {e}"
+        message = f"Workflow failure exception in Agents Framework: {e}"
+        reraise = (
+            NonRetryableAgentsWorkflowError(message)
+            if isinstance(e.__cause__, ApplicationError) and e.__cause__.non_retryable
+            else AgentsWorkflowError(message)
         )
         reraise.__traceback__ = e.__traceback__
         raise reraise from e.__cause__

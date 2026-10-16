@@ -35,6 +35,7 @@ import temporalio.openai_agents as openai_agents
 from temporalio import activity, workflow
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, WorkflowFailureError
+from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.openai_agents import AgentsWorkflowError, ModelActivityParameters
 from temporalio.openai_agents.testing import (
@@ -91,6 +92,10 @@ async def forecast_failure(city: str) -> str:
 
 def custom_error(_ctx: RunContextWrapper[Any], error: Exception) -> str:
     return f"CUSTOM: {type(error).__name__}"
+
+
+def retryable_error(_ctx: RunContextWrapper[Any], error: Exception) -> str:
+    raise ApplicationError(str(error), type="TryAgain") from error
 
 
 @workflow.defn
@@ -551,11 +556,12 @@ class ToolArgumentModesWorkflow:
             "default": default_tool_error_function,
             "none": None,
             "async": async_error,
+            "retryable": retryable_error,
         }[mode]
         tool: Tool
-        if kind == "activity":
+        if kind in ("activity", "activity_failure"):
             tool = openai_agents.workflow.activity_as_tool(
-                forecast,
+                forecast_failure if kind == "activity_failure" else forecast,
                 start_to_close_timeout=timedelta(seconds=10),
                 failure_error_function=failure_error_function,
             )
@@ -637,6 +643,7 @@ class ModeRun:
     model: RecordingModel
     workflow_id: str
     calls: list[str]
+    retried: bool
 
 
 async def _run_mode(
@@ -645,10 +652,11 @@ async def _run_mode(
     kind: str,
     mode: str,
     responses: list[ModelResponse],
+    retry_policy: RetryPolicy | None = None,
 ) -> ModeRun:
     if kind == "nexus" and env.supports_time_skipping:
         pytest.skip("Nexus tests don't work with time-skipping server")
-    calls = ACTIVITY_CALLS if kind == "activity" else OPERATION_CALLS
+    calls = OPERATION_CALLS if kind == "nexus" else ACTIVITY_CALLS
     calls.clear()
     model = RecordingModel(responses)
     async with AgentEnvironment(
@@ -674,6 +682,7 @@ async def _run_mode(
                 id=f"tool-argument-modes-{uuid.uuid4()}",
                 task_queue=worker.task_queue,
                 execution_timeout=timedelta(seconds=15),
+                retry_policy=retry_policy,
             )
             result: list[str] | WorkflowFailureError
             try:
@@ -687,6 +696,7 @@ async def _run_mode(
                 model=model,
                 workflow_id=handle.id,
                 calls=list(calls),
+                retried=(await handle.describe()).run_id != handle.result_run_id,
             )
 
 
@@ -783,3 +793,64 @@ async def test_async_failure_error_function_output_reaches_model(
     assert expected in run.model.inputs[1]
     assert run.calls == []
     assert EventType.EVENT_TYPE_WORKFLOW_TASK_FAILED not in run.event_types
+
+
+@pytest.mark.parametrize("kind", TOOL_KINDS)
+@pytest.mark.parametrize("bad_arguments", ["missing_argument", "malformed_json"])
+async def test_no_failure_error_function_is_not_retried_by_retry_policy(
+    client: Client, env: WorkflowEnvironment, kind: str, bad_arguments: str
+):
+    case = TOOL_CASES[kind]
+    bad_call = ResponseBuilders.tool_call(
+        getattr(case, bad_arguments), case.tool_name, call_id="call-1"
+    )
+    run = await _run_mode(
+        client,
+        env,
+        kind,
+        "none",
+        [bad_call, bad_call, bad_call],
+        retry_policy=RetryPolicy(maximum_attempts=2),
+    )
+    assert isinstance(run.result, WorkflowFailureError)
+    agents_error = run.result.cause
+    assert isinstance(agents_error, ApplicationError)
+    assert agents_error.type == AgentsWorkflowError.__name__
+    assert agents_error.non_retryable
+    assert f"Invalid JSON input for tool {case.tool_name}" in agents_error.message
+    argument_error = agents_error.cause
+    assert isinstance(argument_error, ApplicationError)
+    assert argument_error.type == "ModelBehaviorError"
+    assert argument_error.non_retryable
+    assert len(run.model.inputs) == 1
+    assert run.calls == []
+    assert not run.retried
+
+
+@pytest.mark.parametrize(
+    "kind,mode,tool_name",
+    [
+        pytest.param("activity_failure", "none", "forecast_failure", id="activity"),
+        pytest.param("activity", "retryable", "forecast", id="retryable_error"),
+    ],
+)
+async def test_retryable_failures_are_still_retried_by_retry_policy(
+    client: Client, env: WorkflowEnvironment, kind: str, mode: str, tool_name: str
+):
+    """Only a non-retryable ApplicationError cause makes the runner's error non-retryable."""
+    call = ResponseBuilders.tool_call('{"city": "Tokyo"}', tool_name, call_id="call-1")
+    run = await _run_mode(
+        client,
+        env,
+        kind,
+        mode,
+        [call, call, call],
+        retry_policy=RetryPolicy(maximum_attempts=2),
+    )
+    assert isinstance(run.result, WorkflowFailureError)
+    agents_error = run.result.cause
+    assert isinstance(agents_error, ApplicationError)
+    assert agents_error.type == AgentsWorkflowError.__name__
+    assert not agents_error.non_retryable
+    assert len(run.model.inputs) == 2
+    assert run.retried
