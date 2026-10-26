@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -15,7 +16,7 @@ from strands.types.streaming import StreamEvent
 
 from temporalio import workflow
 from temporalio.api.enums.v1 import EventType
-from temporalio.client import Client, WorkflowFailureError
+from temporalio.client import Client, WorkflowFailureError, WorkflowHistory
 from temporalio.common import RetryPolicy
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.exceptions import ActivityError, ApplicationError
@@ -42,6 +43,18 @@ def _history() -> list[dict[str, Any]]:
 
 def _texts(messages: Any) -> list[str]:
     return [message["content"][0]["text"] for message in messages]
+
+
+def _patch_ids(history: WorkflowHistory) -> list[str]:
+    ids: list[str] = []
+    for event in history.events:
+        if event.event_type != EventType.EVENT_TYPE_MARKER_RECORDED:
+            continue
+        marker = event.marker_recorded_event_attributes
+        if marker.marker_name == "core_patch":
+            payload = marker.details["patch-data"].payloads[0]
+            ids.append(json.loads(payload.data)["id"])
+    return ids
 
 
 class SmallContextModel(MockModel):
@@ -146,6 +159,9 @@ async def test_overflow_is_recovered_by_conversation_manager(client: Client):
         for event in history.events
         if event.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_FAILED
     ]
+    # New executions record the patch marker that gates the exception translation, so
+    # that histories recorded without it keep the ActivityError behavior on replay.
+    assert _patch_ids(history) == ["strands-agents.context-window-overflow-recovery"]
 
     await Replayer(
         workflows=[OverflowAgentWorkflow],
