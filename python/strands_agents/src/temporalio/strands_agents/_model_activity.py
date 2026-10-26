@@ -4,11 +4,15 @@ from datetime import timedelta
 from typing import Any
 
 from strands.models import Model
-from strands.types.session import decode_bytes_values, encode_bytes_values
 from strands.types.streaming import StreamEvent
 
 from temporalio import activity
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
+from temporalio.strands_agents._bytes_values import (
+    decode_messages,
+    encode_event,
+    encode_messages,
+)
 from temporalio.strands_agents._heartbeat_decorator import auto_heartbeater
 
 
@@ -19,10 +23,9 @@ from temporalio.strands_agents._heartbeat_decorator import auto_heartbeater
 #
 # Messages can hold ``bytes`` (image and document sources), which the JSON
 # payload converter cannot carry: it fails on non-UTF-8 bytes and turns ASCII
-# bytes into ``str``. ``__post_init__`` therefore tags every ``bytes`` value as
-# base64 with Strands' own ``encode_bytes_values``, and ``_stream`` restores
-# them before the model sees the messages. Messages without bytes encode to
-# the same JSON as before.
+# bytes into ``str``. ``__post_init__`` therefore tags the ``bytes`` fields as
+# base64 (see ``_bytes_values``), and ``_stream`` restores them before the model
+# sees the messages. Messages without bytes encode to the same JSON as before.
 @dataclass
 class _InvokeModelInput:
     model_name: str | None
@@ -34,7 +37,7 @@ class _InvokeModelInput:
     system_prompt_content: Any = None
 
     def __post_init__(self) -> None:
-        self.messages = encode_bytes_values(self.messages)
+        self.messages = encode_messages(self.messages)
 
 
 @dataclass
@@ -86,12 +89,12 @@ class ModelActivity:
         """Run the named model and return its stream events as a list.
 
         Events that carry ``bytes`` (``redactedContent``) are returned with
-        those values tagged as base64; ``TemporalModel`` restores them. The
-        result is typed as plain dicts because the tagged form would not
-        validate against ``StreamEvent``, whose ``redactedContent`` is ``bytes``.
+        that value tagged as base64; ``TemporalModel`` restores it. The result
+        is typed as plain dicts because the tagged form would not validate
+        against ``StreamEvent``, whose ``redactedContent`` is ``bytes``.
         """
         model = self._get_model(input.model_name)
-        return [encode_bytes_values(event) async for event in _stream(model, input)]
+        return [encode_event(event) async for event in _stream(model, input)]
 
     @activity.defn
     @auto_heartbeater
@@ -108,20 +111,15 @@ class ModelActivity:
         async with stream:
             async for event in _stream(model, input):
                 # Subscribers receive the same JSON-safe form the workflow gets.
-                encoded = encode_bytes_values(event)
+                encoded = encode_event(event)
                 events.append(encoded)
                 topic.publish(encoded)
         return events
 
 
-def decode_event(event: dict[str, Any]) -> StreamEvent:
-    """Restore the ``bytes`` that ``invoke_model`` tagged in a returned stream event."""
-    return decode_bytes_values(event)  # type: ignore[no-any-return]
-
-
 def _stream(model: Model, input: _InvokeModelInput) -> AsyncIterable[StreamEvent]:
     return model.stream(
-        decode_bytes_values(input.messages),
+        decode_messages(input.messages),
         input.tool_specs,
         input.system_prompt,
         tool_choice=input.tool_choice,

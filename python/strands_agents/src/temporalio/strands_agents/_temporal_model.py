@@ -12,11 +12,11 @@ from temporalio import workflow
 from temporalio.common import Priority, RetryPolicy
 from temporalio.workflow import ActivityCancellationType, VersioningIntent
 
+from ._bytes_values import decode_event
 from ._model_activity import (
     ModelActivity,
     _InvokeModelInput,
     _StreamingInvokeModelInput,
-    decode_event,
 )
 
 
