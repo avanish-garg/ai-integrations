@@ -8,6 +8,8 @@ they never appear in workflow event history.
 
 from __future__ import annotations
 
+import base64
+import io
 from collections.abc import Generator, Sequence
 from contextlib import AsyncExitStack, contextmanager
 from datetime import timedelta
@@ -106,6 +108,22 @@ def _classify_errors() -> Generator[None, None, None]:
         if classified is None:
             raise
         raise classified from err
+
+
+def _upload_source(
+    file_base64: str | None, file_bytes: bytes | None, file_path: str | None
+) -> Any:
+    """Pick what to hand the SDK's upload: the in-memory content or the path.
+
+    ``file_base64`` is the content as the plugin now sends it. ``file_bytes`` is
+    the field earlier versions used, which activities scheduled by them still
+    carry.
+    """
+    if file_base64 is not None:
+        return io.BytesIO(base64.b64decode(file_base64))
+    if file_bytes is not None:
+        return io.BytesIO(file_bytes)
+    return file_path
 
 
 async def _drain_interaction_stream(
@@ -226,12 +244,7 @@ class GeminiApiCaller:
             req: _GeminiUploadFileRequest,
         ) -> types.File:
             """Upload a file using the real genai.Client on the worker."""
-            if req.file_bytes is not None:
-                import io
-
-                file_arg: Any = io.BytesIO(req.file_bytes)
-            else:
-                file_arg = req.file_path
+            file_arg = _upload_source(req.file_base64, req.file_bytes, req.file_path)
 
             with _classify_errors():
                 return await self._client.aio.files.upload(
@@ -280,12 +293,7 @@ class GeminiApiCaller:
             req: _GeminiUploadToFileSearchStoreRequest,
         ) -> types.UploadToFileSearchStoreOperation:
             """Upload a file to a file search store on the worker."""
-            if req.file_bytes is not None:
-                import io
-
-                file_arg: Any = io.BytesIO(req.file_bytes)
-            else:
-                file_arg = req.file_path
+            file_arg = _upload_source(req.file_base64, req.file_bytes, req.file_path)
 
             with _classify_errors():
                 return await (
