@@ -9,9 +9,9 @@ so the activity boundary tags them as base64.
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import pytest
@@ -22,12 +22,15 @@ from strands.types.streaming import StreamEvent
 
 from temporalio import workflow
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
+from temporalio.converter import DataConverter
 from temporalio.strands_agents import StrandsPlugin, TemporalAgent
 from temporalio.strands_agents._model_activity import (
     ModelActivity,
     _InvokeModelInput,
     _StreamingInvokeModelInput,
+    _topic_payload,
 )
 from temporalio.strands_agents._plugin import _data_converter
 from temporalio.testing import ActivityEnvironment
@@ -45,14 +48,28 @@ DOCUMENT_BLOCK: ContentBlock = {
 PROMPT: list[ContentBlock] = [{"text": "describe"}, IMAGE_BLOCK, DOCUMENT_BLOCK]
 REDACTED_BLOCK: ContentBlock = {"reasoningContent": {"redactedContent": REDACTED}}
 
-REDACTED_EVENTS: list[Any] = [
+
+def _redacted_events(redacted: bytes) -> list[Any]:
+    return [
+        {"messageStart": {"role": "assistant"}},
+        {
+            "contentBlockDelta": {
+                "delta": {"reasoningContent": {"redactedContent": redacted}}
+            }
+        },
+        {"contentBlockStop": {}},
+        {"contentBlockStart": {"start": {}}},
+        {"contentBlockDelta": {"delta": {"text": "ok"}}},
+        {"contentBlockStop": {}},
+        {"messageStop": {"stopReason": "end_turn"}},
+    ]
+
+
+REDACTED_EVENTS = _redacted_events(REDACTED)
+UTF8_REDACTED = b"redacted-utf8"
+UTF8_EVENTS = _redacted_events(UTF8_REDACTED)
+TEXT_EVENTS: list[Any] = [
     {"messageStart": {"role": "assistant"}},
-    {
-        "contentBlockDelta": {
-            "delta": {"reasoningContent": {"redactedContent": REDACTED}}
-        }
-    },
-    {"contentBlockStop": {}},
     {"contentBlockStart": {"start": {}}},
     {"contentBlockDelta": {"delta": {"text": "ok"}}},
     {"contentBlockStop": {}},
@@ -64,6 +81,7 @@ class _BytesModel(Model):
     """Records the messages it receives and answers with a ``redactedContent`` block."""
 
     seen: list[Any] = []
+    events: list[Any] = REDACTED_EVENTS
 
     def update_config(self, **_model_config: Any) -> None:
         return None
@@ -78,8 +96,16 @@ class _BytesModel(Model):
         self, messages: Any, *_args: Any, **_kwargs: Any
     ) -> AsyncIterable[StreamEvent]:
         _BytesModel.seen.append(messages)
-        for event in REDACTED_EVENTS:
+        for event in self.events:
             yield event
+
+
+class _Utf8Model(_BytesModel):
+    events = UTF8_EVENTS
+
+
+class _TextModel(_BytesModel):
+    events = TEXT_EVENTS
 
 
 def _bytes_types(messages: Any) -> list[list[str]]:
@@ -120,18 +146,27 @@ class BytesWorkflow:
 
 @workflow.defn
 class StreamingBytesWorkflow:
-    def __init__(self) -> None:
+    @workflow.init
+    def __init__(self, model: str) -> None:
         self.stream = WorkflowStream()
         self.agent = TemporalAgent(
-            model="bytes",
+            model=model,
             start_to_close_timeout=timedelta(seconds=15),
             streaming_topic="events",
         )
 
     @workflow.run
-    async def run(self) -> list[list[str]]:
+    async def run(
+        self,
+        model: str,  # pyright: ignore[reportUnusedParameter]
+    ) -> dict[str, Any]:
         await self.agent.invoke_async(PROMPT[:2])
-        return _bytes_types(self.agent.messages)
+        reply = self.agent.messages[-1]["content"][0]
+        redacted = reply.get("reasoningContent", {}).get("redactedContent")
+        return {
+            "types": _bytes_types(self.agent.messages),
+            "redacted_hex": redacted.hex() if redacted is not None else None,
+        }
 
 
 @pytest.mark.parametrize(
@@ -260,56 +295,205 @@ async def test_bytes_across_a_workflow(client: Client):
     ).replay_workflow(history)
 
 
-async def test_bytes_across_a_streaming_workflow(client: Client):
-    """Subscribers get the base64-tagged events; the workflow still gets bytes."""
+# The plugin on the client makes the whole run use the Pydantic data converter;
+# the plugin on the worker only leaves the client, and so the activity's
+# publisher and the subscriber, on the default converter.
+Converter = Literal["pydantic", "default"]
+CONVERTERS: list[Converter] = ["pydantic", "default"]
+
+
+class _Run:
+    """What one streaming workflow run produced, as a subscriber and the workflow saw it."""
+
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+        self.error: BaseException | None = None
+        self.result: dict[str, Any] = {}
+        self.history: Any = None
+
+
+async def _stream_run(
+    client: Client,
+    converter: Converter,
+    model: type[_BytesModel],
+    result_type: Any,
+    expected_events: int,
+) -> _Run:
+    """Run a streaming workflow and subscribe to its topic with ``result_type``.
+
+    A subscription that raises (as a validation failure does) is recorded in
+    ``error`` rather than lost in the background task.
+    """
     task_queue = f"test_model_bytes_streaming-{uuid4()}"
     workflow_id = f"test_model_bytes_streaming_{uuid4()}"
-    plugin = StrandsPlugin(models={"bytes": _BytesModel})
-    _BytesModel.seen.clear()
+    plugin = StrandsPlugin(models={"bytes": model})
+    worker_plugins = []
+    if converter == "pydantic":
+        config = client.config()
+        config["plugins"] = [*config["plugins"], plugin]
+        client = Client(**config)
+        assert client.data_converter.payload_converter_class is (
+            pydantic_data_converter.payload_converter_class
+        )
+    else:
+        worker_plugins.append(plugin)
+        assert (
+            client.data_converter.payload_converter_class
+            is DataConverter.default.payload_converter_class
+        )
+    run = _Run()
 
     async with Worker(
         client,
         task_queue=task_queue,
         workflows=[StreamingBytesWorkflow],
-        plugins=[plugin],
+        plugins=worker_plugins,
         max_cached_workflows=0,
     ):
         handle = await client.start_workflow(
             StreamingBytesWorkflow.run,
+            "bytes",
             id=workflow_id,
             task_queue=task_queue,
         )
-
         stream = WorkflowStreamClient.create(client, workflow_id)
-        events: list[Any] = []
 
         async def collect() -> None:
-            async for item in stream.subscribe(
-                ["events"],
-                from_offset=0,
-                result_type=dict[str, Any],
-                poll_cooldown=timedelta(milliseconds=50),
-            ):
-                events.append(item.data)
-                if len(events) >= len(REDACTED_EVENTS):
-                    break
+            try:
+                async for item in stream.subscribe(
+                    ["events"],
+                    from_offset=0,
+                    result_type=result_type,
+                    poll_cooldown=timedelta(milliseconds=50),
+                ):
+                    run.events.append(item.data)
+                    if len(run.events) >= expected_events:
+                        break
+            except Exception as err:
+                run.error = err
 
         collect_task = asyncio.create_task(collect())
-        summary = await handle.result()
+        run.result = await handle.result()
         await asyncio.wait_for(collect_task, timeout=10.0)
 
-    assert summary == [["bytes"], ["bytes"]]
-    assert _BytesModel.seen[0][0]["content"][1] == IMAGE_BLOCK
-    # Events on the topic are JSON, so ``bytes`` appear in their tagged form.
-    assert decode_bytes_values(events) == REDACTED_EVENTS
-    assert events[1]["contentBlockDelta"]["delta"]["reasoningContent"][
-        "redactedContent"
-    ] == {"__bytes_encoded__": True, "data": base64.b64encode(REDACTED).decode()}
-
-    history = await handle.fetch_history()
-    assert get_activities(history) == ["invoke_model_streaming"]
-
+    run.history = await handle.fetch_history()
+    # One activity ran, and it completed: the first attempt did not fail.
+    assert get_activities(run.history) == ["invoke_model_streaming"]
+    assert not [
+        event
+        for event in run.history.events
+        if event.HasField("activity_task_failed_event_attributes")
+    ]
     await Replayer(
-        workflows=[StreamingBytesWorkflow],
-        plugins=[plugin],
-    ).replay_workflow(history)
+        workflows=[StreamingBytesWorkflow], plugins=[plugin]
+    ).replay_workflow(run.history)
+    return run
+
+
+@pytest.mark.parametrize("converter", CONVERTERS)
+async def test_stream_event_subscriber_reads_utf8_redacted_content(
+    client: Client, converter: Converter
+):
+    """The README's ``result_type=StreamEvent`` subscription gets the original bytes."""
+    run = await _stream_run(
+        client, converter, _Utf8Model, StreamEvent, len(UTF8_EVENTS)
+    )
+
+    assert run.error is None
+    assert run.events == UTF8_EVENTS
+    # The workflow got the bytes from the activity result, not from the topic.
+    assert run.result["redacted_hex"] == UTF8_REDACTED.hex()
+
+
+@pytest.mark.parametrize("converter", CONVERTERS)
+async def test_stream_event_subscriber_survives_non_utf8_redacted_content(
+    client: Client, converter: Converter
+):
+    """Non-UTF-8 ``redactedContent`` does not fail the activity or end a typed subscription.
+
+    The default converter carries any bytes, so the subscriber gets them. The
+    Pydantic converter cannot write them and a ``StreamEvent`` cannot read them,
+    so the subscriber gets the event with the bytes emptied, and every event
+    after it. The workflow gets the real bytes either way.
+    """
+    run = await _stream_run(
+        client, converter, _BytesModel, StreamEvent, len(REDACTED_EVENTS)
+    )
+
+    assert run.error is None
+    expected = REDACTED if converter == "default" else b""
+    assert run.events == _redacted_events(expected)
+    assert run.result["types"] == [["bytes"], ["bytes"]]
+    assert run.result["redacted_hex"] == REDACTED.hex()
+
+
+@pytest.mark.parametrize("converter", CONVERTERS)
+async def test_untyped_subscriber_reads_what_it_read_before_the_tagging(
+    client: Client, converter: Converter
+):
+    """Without a type the topic carries the converter's own form, never the tagged dict.
+
+    The default converter writes bytes as a list of ints and the Pydantic
+    converter as a UTF-8 string.
+    """
+    utf8 = await _stream_run(
+        client, converter, _Utf8Model, dict[str, Any], len(UTF8_EVENTS)
+    )
+    other = await _stream_run(
+        client, converter, _BytesModel, dict[str, Any], len(REDACTED_EVENTS)
+    )
+
+    def redacted(run: _Run) -> Any:
+        return run.events[1]["contentBlockDelta"]["delta"]["reasoningContent"][
+            "redactedContent"
+        ]
+
+    assert utf8.error is None and other.error is None
+    assert len(utf8.events) == len(UTF8_EVENTS)
+    assert len(other.events) == len(REDACTED_EVENTS)
+    if converter == "default":
+        assert redacted(utf8) == list(UTF8_REDACTED)
+        assert redacted(other) == list(REDACTED)
+    else:
+        assert redacted(utf8) == UTF8_REDACTED.decode()
+        assert redacted(other) == ""
+    # Everything that is not the bytes field is the same on both.
+    assert utf8.events[0] == UTF8_EVENTS[0]
+    assert utf8.events[2:] == UTF8_EVENTS[2:]
+
+
+@pytest.mark.parametrize("converter", CONVERTERS)
+@pytest.mark.parametrize("result_type", [StreamEvent, dict[str, Any], None])
+async def test_events_without_bytes_are_published_unchanged(
+    client: Client, converter: Converter, result_type: Any
+):
+    run = await _stream_run(
+        client, converter, _TextModel, result_type, len(TEXT_EVENTS)
+    )
+
+    assert run.error is None
+    assert run.events == TEXT_EVENTS
+    assert run.result["redacted_hex"] is None
+
+
+@pytest.mark.parametrize(
+    "converter_factory",
+    [lambda: DataConverter.default, lambda: pydantic_data_converter],
+    ids=["default", "pydantic"],
+)
+def test_topic_payload_matches_the_converter_for_events_it_can_carry(
+    converter_factory: Callable[[], DataConverter],
+):
+    converter = converter_factory().payload_converter
+    event = {"contentBlockDelta": {"delta": {"text": "hi"}}}
+
+    assert _topic_payload(event, converter) == converter.to_payload(event)  # type: ignore[arg-type]
+
+
+def test_topic_payload_does_not_hide_other_encoding_errors():
+    """Only ``bytes`` are emptied; an event the converter cannot write still raises."""
+    with pytest.raises(TypeError):
+        _topic_payload(
+            {"contentBlockDelta": {"delta": {"text": object()}}},  # type: ignore[typeddict-item]
+            DataConverter.default.payload_converter,
+        )

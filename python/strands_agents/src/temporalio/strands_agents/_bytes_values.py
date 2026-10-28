@@ -145,3 +145,8 @@ def encode_event(event: Any) -> Any:
 def decode_event(event: Any) -> Any:
     """Restore the ``bytes`` that ``encode_event`` tagged in a stream event."""
     return _map_event(event, _decode)
+
+
+def blank_event(event: Any) -> Any:
+    """Empty the ``bytes`` in a model stream event, keeping the field itself."""
+    return _map_event(event, lambda value: b"" if isinstance(value, bytes) else value)
